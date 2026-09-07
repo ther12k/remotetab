@@ -16,7 +16,8 @@ export type PopupRequest =
   | { type: 'saveSettings'; signalingUrl: string; iceUrls: string[] }
   | { type: 'pairStart' }
   | { type: 'pairCancel' }
-  | { type: 'pairedList' };
+  | { type: 'pairedList' }
+  | { type: 'revokeDevice'; deviceId: string };
 
 export type StateResponse = {
   ok: boolean;
@@ -54,7 +55,8 @@ export function isPopupRequest(value: unknown): value is PopupRequest {
     case 'pairStart':
     case 'pairCancel':
     case 'pairedList':
-      return true;
+    case 'revokeDevice':
+      return typeof v.deviceId === 'string' && v.deviceId.length >= 8;
     default:
       return false;
   }

@@ -2,6 +2,7 @@ import { DEFAULT_ICE_SERVERS } from '@remotetab/webrtc';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PairScreen } from './components/PairScreen.tsx';
 import { Viewer } from './components/Viewer.tsx';
+import { forgetDesktop, listPairedDesktops, type PairedDesktop } from './lib/pairing.ts';
 import { loadPhoneIdentity } from './lib/phone-identity.ts';
 import { ReceiverSession, type RemoteStatus } from './lib/receiver-session.ts';
 
@@ -21,6 +22,13 @@ function defaultServerUrl(): string {
 export function App() {
   const identity = useMemo(() => loadPhoneIdentity(), []);
   const [screen, setScreen] = useState<Screen>('connect');
+  const [desktops, setDesktops] = useState<PairedDesktop[]>([]);
+  const refreshDesktops = useCallback(() => {
+    void listPairedDesktops().then(setDesktops);
+  }, []);
+  useEffect(() => {
+    refreshDesktops();
+  }, [refreshDesktops]);
   const [code, setCode] = useState<string>(() => {
     try {
       return localStorage.getItem(CODE_KEY) ?? '';
@@ -101,7 +109,14 @@ export function App() {
         setServer={setServer}
         status={status}
         onConnect={connect}
-        onPair={() => setScreen('pair')}
+        onPair={() => {
+          refreshDesktops();
+          setScreen('pair');
+        }}
+        desktops={desktops}
+        onForget={(id) => {
+          void forgetDesktop(id).then(refreshDesktops);
+        }}
       />
     );
   }
@@ -120,8 +135,10 @@ function ConnectScreen(props: {
   status: RemoteStatus;
   onConnect: () => void;
   onPair: () => void;
+  desktops: PairedDesktop[];
+  onForget: (deviceId: string) => void;
 }) {
-  const { code, setCode, server, setServer, status, onConnect, onPair } = props;
+  const { code, setCode, server, setServer, status, onConnect, onPair, desktops, onForget } = props;
   const valid = /^[A-Za-z0-9_-]{8,64}$/.test(code.trim());
   const busy =
     status.phase === 'connecting' || status.phase === 'requesting' || status.phase === 'signaling';
@@ -166,6 +183,42 @@ function ConnectScreen(props: {
       <button type="button" className="primary" disabled={!valid || busy} onClick={onConnect}>
         {busy ? 'Connecting…' : 'Connect'}
       </button>
+
+      {desktops.length > 0 && (
+        <section>
+          <div
+            className="label"
+            style={{ fontSize: 12, textTransform: 'uppercase', opacity: 0.6, marginBottom: 4 }}
+          >
+            Paired computers
+          </div>
+          {desktops.map((d) => (
+            <div
+              key={d.deviceId}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <button
+                type="button"
+                className="ghost"
+                style={{ textAlign: 'left' }}
+                onClick={() => {
+                  setCode(d.deviceId);
+                }}
+              >
+                {d.displayName ?? d.deviceId.slice(0, 12)} · {d.fingerprint.slice(0, 10)}…
+              </button>
+              <button type="button" className="ghost" onClick={() => onForget(d.deviceId)}>
+                Forget
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
 
       <button type="button" className="ghost" onClick={onPair}>
         Pair with a QR code…

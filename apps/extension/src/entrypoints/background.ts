@@ -390,7 +390,7 @@ export default defineBackground(() => {
           const identity = await identityPromise;
           const phone =
             activePhoneDeviceId !== null
-              ? (await pairedDevices.list()).find((d) => d.deviceId === activePhoneDeviceId)
+              ? await pairedDevices.findActive(activePhoneDeviceId)
               : undefined;
           if (!phone) {
             await stopRemoteSession('user', {
@@ -554,6 +554,31 @@ export default defineBackground(() => {
     return { ok: true, state: active };
   }
 
+  /** Revoke a paired phone (#015): end its session, bar future auth. */
+  async function revokeDevice(deviceId: string): Promise<StateResponse> {
+    const revoked = await pairedDevices.revoke(deviceId, Date.now());
+    if (!revoked) {
+      return {
+        ok: false,
+        error: {
+          code: 'DEVICE_REVOKED',
+          message: 'That device was not found among the paired phones.',
+        },
+      };
+    }
+    if (activePhoneDeviceId === deviceId && activeSessionId !== null) {
+      // Tell the phone WHY the session ended before tearing everything down.
+      signaling?.send(
+        signalingFrame('session.close', { sessionId: activeSessionId, reason: 'revoked' }),
+      );
+      await stopRemoteSession('user', {
+        code: 'DEVICE_REVOKED',
+        message: 'Phone revoked. Remote Mode stopped.',
+      });
+    }
+    return { ok: true, state: await store.load() };
+  }
+
   /** Build ONE ordered, fail-safe teardown pass (issue #012). */
   function buildTeardown(): TeardownOrchestrator {
     const steps: TeardownStep[] = [
@@ -674,6 +699,58 @@ export default defineBackground(() => {
                   },
                 }),
               );
+            return true;
+          case 'pairStart':
+            void (async () => {
+              try {
+                const identity = await identityPromise;
+                if (signalingState !== 'online') {
+                  sendResponse({
+                    ok: false,
+                    error: {
+                      code: 'CONNECTION_LOST',
+                      message: 'Signaling is offline. Enable Remote first.',
+                    },
+                  });
+                  return;
+                }
+                await getPairing(identity).create(300);
+                const result = await new Promise<PairStartResponse>((resolve) => {
+                  pairPayloadWaiter = resolve;
+                  setTimeout(() => {
+                    if (pairPayloadWaiter !== null) {
+                      pairPayloadWaiter = null;
+                      resolve({
+                        ok: false,
+                        error: {
+                          code: 'CONNECTION_LOST',
+                          message: 'Signaling did not confirm the pairing window.',
+                        },
+                      });
+                    }
+                  }, 5000);
+                });
+                sendResponse(result as never);
+              } catch {
+                sendResponse({
+                  ok: false,
+                  error: { code: 'MESSAGE_INVALID', message: 'Pairing could not start.' },
+                } as never);
+              }
+            })();
+            return true;
+          case 'pairCancel':
+            void identityPromise.then((identity) => getPairing(identity).cancel());
+            pairPayloadWaiter = null;
+            sendResponse({ ok: true } as never);
+            return true;
+          case 'pairedList':
+            void pairedDevices
+              .list()
+              .then((devices) => sendResponse({ ok: true, devices } as never));
+            return true;
+          case 'revokeDevice':
+            void revokeDevice(raw.deviceId).then((resp) => sendResponse(resp as never));
             return true;
         }
         return false;
