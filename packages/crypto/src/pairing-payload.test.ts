@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { bytesToBase64url, utf8ToBytes } from './b64.ts';
 import {
   decodePairingPayload,
   encodePairingPayload,
