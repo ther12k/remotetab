@@ -52,6 +52,8 @@ export class TouchBridge {
     this.active = open;
     if (!open) {
       this.classifier.reset();
+      // Never let a channel drop flush stale moves/clicks into a new session.
+      this.sender.reset();
     }
   }
 

@@ -116,3 +116,30 @@ describe('PrioritizedInputSender', () => {
     s.dispose();
   });
 });
+
+describe('PrioritizedInputSender.reset', () => {
+  it('drops queued urgent frames, moves, and wheel on reset (#016)', () => {
+    const clock = makeClock();
+    let congested = true;
+    const sent: string[] = [];
+    const s = new PrioritizedInputSender({
+      send: (raw) => {
+        if (congested) return false;
+        sent.push(raw);
+        return true;
+      },
+      encodeWheel: () => 'wheel',
+      moveIntervalMs: 30,
+      timers: clock.timers,
+    });
+    s.sendUrgent('keyDown-a'); // queued (congested)
+    s.sendMove('move1'); // pending flush
+    s.sendWheel({ x: 0.5, y: 0.5, deltaX: 0, deltaY: 40 }); // pending
+    s.reset();
+    congested = false;
+    clock.advance(100);
+    // Nothing from the old session may be flushed after the reset.
+    expect(sent).toEqual([]);
+    expect(s.stats.queuedUrgent).toBe(0);
+  });
+});

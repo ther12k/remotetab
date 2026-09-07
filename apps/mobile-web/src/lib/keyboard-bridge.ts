@@ -103,6 +103,11 @@ export class KeyboardBridge {
     }
   }
 
+  /** Channel dropped: drop queued keystrokes so nothing replays later. */
+  reset(): void {
+    this.opts.sender.reset();
+  }
+
   /** Send text as bounded chunks (also used by the sheet's Send button). */
   sendText(text: string): void {
     if (text.length === 0) return;
