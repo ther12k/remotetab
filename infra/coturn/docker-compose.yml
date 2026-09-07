@@ -1,0 +1,14 @@
+# RemoteTab reference TURN deployment (issue #017).
+#
+#   TURN_SECRET must equal the signaling service's TURN_SECRET.
+#   Ports: 3478/udp+tcp (TURN), 5349/tcp (TLS), 49160-49200/udp (relays).
+#
+services:
+  coturn:
+    image: coturn/coturn:4-alpine
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - TURN_SECRET=${TURN_SECRET:?set TURN_SECRET in .env}
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro

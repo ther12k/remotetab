@@ -1,4 +1,4 @@
-import { DEFAULT_ICE_SERVERS } from '@remotetab/webrtc';
+import { DEFAULT_ICE_SERVERS, fetchTurnIceServers } from '@remotetab/webrtc';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PairScreen } from './components/PairScreen.tsx';
 import { Viewer } from './components/Viewer.tsx';
@@ -54,7 +54,7 @@ export function App() {
     }
   }, []);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     const laptopCode = code.trim();
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(laptopCode)) return;
     try {
@@ -68,7 +68,10 @@ export function App() {
       url: server.trim(),
       desktopDeviceId: laptopCode,
       identity,
-      iceServers: DEFAULT_ICE_SERVERS, // TURN from the credential endpoint lands in #017
+      iceServers: [
+        ...DEFAULT_ICE_SERVERS,
+        ...(await fetchTurnIceServers(server.trim(), identity.deviceId)),
+      ], // TURN credentials are short-lived and device-bound (#017)
     });
     sessionRef.current = session;
     session.on('status', applyStatus);

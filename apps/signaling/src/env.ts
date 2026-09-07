@@ -7,6 +7,12 @@ export type Env = {
   reconnectTtlSeconds: number;
   /** Allowed browser origins for WS upgrade; empty = allow all (dev only). */
   allowedOrigins: string[];
+  /** coturn shared secret — NEVER sent to clients. Empty disables the endpoint. */
+  turnSecret: string;
+  /** TURN URL list advertised to clients, e.g. turn:turn.example.com:3478 */
+  turnUrls: string[];
+  /** Credential lifetime in seconds. */
+  turnTtlSeconds: number;
 };
 
 function int(v: string | undefined, fallback: number): number {
@@ -26,5 +32,11 @@ export function parseEnv(env: Record<string, string | undefined> = process.env):
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),
+    turnSecret: env.TURN_SECRET ?? '',
+    turnUrls: (env.TURN_URLS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.startsWith('turn:') || s.startsWith('turns:')),
+    turnTtlSeconds: int(env.TURN_TTL_SECONDS, 600),
   };
 }

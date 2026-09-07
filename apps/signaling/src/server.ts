@@ -11,6 +11,7 @@ import type { Logger } from './logger.ts';
 import { FrameRateLimiter } from './rate-limit.ts';
 import { ConnectionRegistry, MemoryPairingRepo, MemorySessionRepo } from './registry.ts';
 import { SignalingRouter, WS_CLOSE_PROTOCOL_ERROR } from './router.ts';
+import { isValidTurnDeviceId, mintTurnCredentials, turnIceServer } from './turn.ts';
 
 const HEARTBEAT_TIMEOUT_SEC = 45;
 /** Per-connection signaling frame budget. */
@@ -58,6 +59,30 @@ export function startServer(
   app.get('/health/live', (c) => c.json({ status: 'live' }));
 
   app.get('/health/ready', (c) => c.json({ status: 'ready', connections: registry.size }));
+
+  // Short-lived TURN credentials (issue #017). Disabled unless TURN_SECRET is
+  // configured. The shared secret never leaves this process.
+  app.post('/turn/credentials', async (c) => {
+    if (ctx.env.turnSecret === '' || ctx.env.turnUrls.length === 0) {
+      return c.json({ error: 'turn_disabled' }, 404);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { deviceId?: unknown };
+    if (!isValidTurnDeviceId(body.deviceId)) {
+      return c.json({ error: 'invalid_device_id' }, 400);
+    }
+    const cred = await mintTurnCredentials({
+      secret: ctx.env.turnSecret,
+      deviceId: body.deviceId,
+      ttlSeconds: ctx.env.turnTtlSeconds,
+    });
+    ctx.log.info('turn.credentials', { deviceId: body.deviceId });
+    return c.json({
+      ttlSeconds: cred.ttlSeconds,
+      username: cred.username,
+      credential: cred.credential,
+      iceServers: [turnIceServer(ctx.env.turnUrls, cred)],
+    });
+  });
 
   app.onError((err, c) => {
     ctx.log.error('http.error', { path: c.req.path, error: err.message });
