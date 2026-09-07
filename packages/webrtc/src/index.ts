@@ -6,3 +6,9 @@ export {
   type PeerRole,
   RTCPeerHandle,
 } from './peer-handle.ts';
+export {
+  describeSelectedPair,
+  fetchTurnIceServers,
+  type SelectedPair,
+  type TurnResponse,
+} from './turn-client.ts';

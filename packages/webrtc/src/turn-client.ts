@@ -1,0 +1,104 @@
+/**
+ * Client-side TURN helper (issue #017): turns a ws(s) signaling URL into its
+ * http(s) origin, requests short-lived credentials bound to this device, and
+ * merges them into the ICE server list. Best-effort by design — if the
+ * endpoint is unavailable the session still works over STUN/direct.
+ */
+
+export type TurnResponse = {
+  ttlSeconds: number;
+  username: string;
+  credential: string;
+  iceServers: { urls: string | string[]; username: string; credential: string }[];
+};
+
+function httpOriginFromWs(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'wss:') return `https://${parsed.host}`;
+    if (parsed.protocol === 'ws:') return `http://${parsed.host}`;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch TURN ICE servers. Returns [] when TURN is unavailable/disabled —
+ * callers merge the result with their STUN defaults and proceed.
+ */
+export async function fetchTurnIceServers(
+  signalingUrl: string,
+  deviceId: string,
+  timeoutMs = 4000,
+): Promise<{ urls: string | string[]; username: string; credential: string }[]> {
+  const origin = httpOriginFromWs(signalingUrl);
+  if (origin === null) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${origin}/turn/credentials`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as Partial<TurnResponse>;
+    if (!Array.isArray(body.iceServers)) return [];
+    return body.iceServers.filter(
+      (s): s is { urls: string | string[]; username: string; credential: string } =>
+        (typeof s.urls === 'string' || Array.isArray(s.urls)) &&
+        typeof s.username === 'string' &&
+        typeof s.credential === 'string',
+    );
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Distinguish relay vs direct from a peer connection's stats (#019 builds on this). */
+export type SelectedPair = {
+  localType: string;
+  remoteType: string;
+  transport: 'relay' | 'direct' | 'unknown';
+};
+
+export async function describeSelectedPair(pc: RTCPeerConnection): Promise<SelectedPair | null> {
+  try {
+    const stats = await pc.getStats();
+    let pair: { localCandidateId?: string; remoteCandidateId?: string } | null = null;
+    const candidates = new Map<string, { candidateType?: string }>();
+    stats.forEach((report) => {
+      if (
+        report.type === 'candidate-pair' &&
+        (report as { state?: string }).state === 'succeeded'
+      ) {
+        pair = report as { localCandidateId?: string; remoteCandidateId?: string };
+      }
+      if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
+        const r = report as { id?: string; candidateType?: string };
+        if (r.id) candidates.set(r.id, r);
+      }
+    });
+    if (pair === null) return null;
+    const p = pair as { localCandidateId?: string; remoteCandidateId?: string };
+    const localType =
+      (p.localCandidateId !== undefined
+        ? candidates.get(p.localCandidateId)?.candidateType
+        : undefined) ?? 'unknown';
+    const remoteType =
+      (p.remoteCandidateId !== undefined
+        ? candidates.get(p.remoteCandidateId)?.candidateType
+        : undefined) ?? 'unknown';
+    return {
+      localType,
+      remoteType,
+      transport: localType === 'relay' || remoteType === 'relay' ? 'relay' : 'direct',
+    };
+  } catch {
+    return null;
+  }
+}

@@ -24,7 +24,7 @@ import {
   signalIceSchema,
   signalingFrame,
 } from '@remotetab/protocol';
-import { DEFAULT_ICE_SERVERS, toIceServers } from '@remotetab/webrtc';
+import { DEFAULT_ICE_SERVERS, fetchTurnIceServers, toIceServers } from '@remotetab/webrtc';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { CdpInputAdapter } from '@/cdp-input.ts';
@@ -202,6 +202,13 @@ export default defineBackground(() => {
   // Signaling session flow (#007) + pairing (#013)
   // -------------------------------------------------------------------------
 
+  /** STUN defaults + best-effort short-lived TURN credentials (#017). */
+  async function collectIceServers(iceUrls: string[], signalingUrl: string, deviceId: string) {
+    const stunOnly = iceUrls.length > 0 ? toIceServers(iceUrls) : DEFAULT_ICE_SERVERS;
+    const turn = await fetchTurnIceServers(signalingUrl, deviceId);
+    return turn.length > 0 ? [...stunOnly, ...turn] : stunOnly;
+  }
+
   function getPairing(
     identity: Awaited<ReturnType<typeof deviceStore.loadOrCreate>>,
   ): PairingManager {
@@ -217,8 +224,11 @@ export default defineBackground(() => {
 
   async function startSignaling(): Promise<void> {
     const [settings, identity] = await Promise.all([settingsStore.load(), identityPromise]);
-    const servers =
-      settings.iceUrls.length > 0 ? toIceServers(settings.iceUrls) : DEFAULT_ICE_SERVERS;
+    const servers = await collectIceServers(
+      settings.iceUrls,
+      settings.signalingUrl,
+      identity.deviceId,
+    );
     void getPairing(identity);
 
     signaling?.close();
