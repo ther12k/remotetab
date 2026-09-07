@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RemoteTab</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+      }
+      body {
+        width: 340px;
+        margin: 0;
+        padding: 14px;
+        background: canvas;
+        color: canvastext;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0;
+      }
+      #phase {
+        font-size: 12px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        background: color-mix(in srgb, canvastext 12%, transparent);
+      }
+      #phase.active {
+        background: #d9f2e2;
+        color: #116632;
+      }
+      section {
+        margin-bottom: 12px;
+      }
+      .label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        opacity: 0.65;
+        margin-bottom: 2px;
+      }
+      #tab-title {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #tab-origin {
+        font-size: 12px;
+        opacity: 0.75;
+      }
+      button {
+        width: 100%;
+        padding: 9px 12px;
+        margin-top: 4px;
+        border: 1px solid color-mix(in srgb, canvastext 25%, transparent);
+        border-radius: 8px;
+        background: buttonface;
+        color: buttontext;
+        font: inherit;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: white;
+      }
+      button.danger {
+        background: #dc2626;
+        border-color: #dc2626;
+        color: white;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #error {
+        color: #b91c1c;
+        font-size: 12px;
+        min-height: 1em;
+        margin: 6px 0;
+      }
+      #rationale {
+        font-size: 12px;
+        opacity: 0.8;
+        line-height: 1.45;
+      }
+      #rationale summary {
+        cursor: pointer;
+      }
+      .muted {
+        opacity: 0.6;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>RemoteTab</h1>
+      <span id="phase">Idle</span>
+    </header>
+
+    <section>
+      <div class="label">Current tab</div>
+      <div id="tab-title">…</div>
+      <div id="tab-origin"></div>
+    </section>
+
+    <div id="error" role="alert"></div>
+
+    <section>
+      <button type="button" id="enable" class="primary">Enable Remote</button>
+      <button type="button" id="stop" class="danger" hidden>Stop Remote</button>
+    </section>
+
+    <section>
+      <div class="label">Paired devices</div>
+      <div class="muted">Pairing arrives with the next milestone.</div>
+    </section>
+
+    <details id="rationale">
+      <summary>What RemoteTab accesses</summary>
+      <ul>
+        <li><b>Capture selected tab</b> — streams the one tab you pick to your phone as video.</li>
+        <li><b>Send remote input</b> — forwards taps and typing from your phone (Chrome debugger API).</li>
+        <li><b>Keep system awake</b> — prevents sleep while Remote Mode is on.</li>
+      </ul>
+      <p>Your browser logins and cookies stay on this computer and are never sent anywhere.</p>
+    </details>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
