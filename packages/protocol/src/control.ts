@@ -80,6 +80,7 @@ export const textInsertSchema = z.strictObject({ text: wellFormedText });
 
 export const viewportRequestSchema = z.strictObject({});
 
+/** Laptop → phone: the CSS viewport the phone maps normalized taps into. */
 export const viewportSyncSchema = z.strictObject({
   cssWidth: z.number().int().finite().min(50).max(20000),
   cssHeight: z.number().int().finite().min(50).max(20000),
@@ -114,6 +115,11 @@ export const controlMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('viewport.request'),
     payload: viewportRequestSchema,
   }),
+  z.strictObject({
+    ...envelopeBase,
+    type: z.literal('viewport.sync'),
+    payload: viewportSyncSchema,
+  }),
   z.strictObject({ ...envelopeBase, type: z.literal('session.stop'), payload: sessionStopSchema }),
 ]);
 
@@ -126,6 +132,7 @@ export type ControlMessageType =
   | 'key.up'
   | 'text.insert'
   | 'viewport.request'
+  | 'viewport.sync'
   | 'session.stop';
 export type ControlMessage = z.output<typeof controlMessageSchema>;
 export type ControlPayload<T extends ControlMessageType = ControlMessageType> = Extract<
@@ -142,6 +149,7 @@ export const CONTROL_MESSAGE_TYPES = [
   'key.up',
   'text.insert',
   'viewport.request',
+  'viewport.sync',
   'session.stop',
 ] as const satisfies readonly ControlMessageType[];
 
