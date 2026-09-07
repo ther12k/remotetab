@@ -4,8 +4,10 @@
  * service worker. All Enable actions are explicit local user clicks.
  */
 
+import qrcode from 'qrcode-generator';
 import { browser } from 'wxt/browser';
 import {
+  type PairStartResponse,
   type PopupRequest,
   SESSION_STATE_KEY,
   type SettingsResponse,
@@ -144,6 +146,14 @@ function main(): void {
     'click',
     () => void onSaveSettings(),
   );
+  (document.getElementById('pair-start') as HTMLButtonElement | null)?.addEventListener(
+    'click',
+    () => void onPairStart(),
+  );
+  (document.getElementById('pair-cancel') as HTMLButtonElement | null)?.addEventListener(
+    'click',
+    () => void onPairCancel(),
+  );
 
   // Live state updates from the service worker.
   browser.storage.onChanged.addListener((changes, area) => {
@@ -155,6 +165,73 @@ function main(): void {
   void refreshTab();
   void refreshState();
   void refreshSettings();
+  void refreshPaired();
+}
+
+async function refreshPaired(): Promise<void> {
+  const el = document.getElementById('paired-list');
+  if (!el) return;
+  const res = (await browser.runtime.sendMessage({ type: 'pairedList' })) as {
+    ok: boolean;
+    devices?: { deviceId: string; displayName: string }[];
+  };
+  if (res.ok && res.devices && res.devices.length > 0) {
+    el.textContent = res.devices.map((d) => d.displayName).join(', ');
+  } else {
+    el.textContent = 'No phones paired yet.';
+  }
+}
+
+let countdownTimer: ReturnType<typeof setInterval> | null = null;
+
+async function onPairStart(): Promise<void> {
+  const qrWrap = document.getElementById('pair-qr-wrap');
+  const qrImg = document.getElementById('pair-qr') as HTMLImageElement | null;
+  const codeEl = document.getElementById('pair-code');
+  const startBtn = document.getElementById('pair-start') as HTMLButtonElement | null;
+  const errorEl = document.getElementById('error');
+  const res = (await browser.runtime.sendMessage({ type: 'pairStart' })) as PairStartResponse;
+  if (!res.ok) {
+    if (errorEl) errorEl.textContent = res.error.message;
+    return;
+  }
+  if (!qrWrap || !qrImg || !codeEl || !startBtn) return;
+  const qr = qrcode(0, 'M');
+  qr.addData(res.payload);
+  qr.make();
+  qrImg.src = qr.createDataURL(4, 4);
+  codeEl.textContent = res.payload;
+  qrWrap.hidden = false;
+  startBtn.disabled = true;
+  const countdown = document.getElementById('pair-countdown');
+  if (countdown) {
+    if (countdownTimer !== null) clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+      const left = Math.max(0, Math.round((res.expiresAtMs - Date.now()) / 1000));
+      countdown.textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+      if (left <= 0) {
+        clearInterval(countdownTimer ?? undefined);
+        void refreshPairingIdle();
+      }
+    }, 500);
+  }
+  void refreshPaired();
+}
+
+function refreshPairingIdle(): void {
+  const qrWrap = document.getElementById('pair-qr-wrap');
+  const startBtn = document.getElementById('pair-start') as HTMLButtonElement | null;
+  if (qrWrap) qrWrap.hidden = true;
+  if (startBtn) startBtn.disabled = false;
+  if (countdownTimer !== null) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+}
+
+async function onPairCancel(): Promise<void> {
+  await browser.runtime.sendMessage({ type: 'pairCancel' });
+  refreshPairingIdle();
 }
 
 void main();

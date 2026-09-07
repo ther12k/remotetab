@@ -33,5 +33,10 @@ export {
   pairingProof,
   verifyPairingProof,
 } from './pairing.ts';
+export {
+  decodePairingPayload,
+  encodePairingPayload,
+  type PairingPayloadV1,
+} from './pairing-payload.ts';
 export { randomBytes, timingSafeEqual } from './random.ts';
 export { encodeTranscript } from './transcript.ts';

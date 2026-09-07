@@ -234,3 +234,25 @@ button.ghost {
   border-color: var(--accent);
   color: #fff;
 }
+
+.scan-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.scan-video {
+  width: 100%;
+  max-width: 420px;
+  border-radius: 12px;
+  background: #000;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+}
+
+button.ghost {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+}

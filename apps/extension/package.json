@@ -12,7 +12,9 @@
     "wxt": "^0.21.4"
   },
   "dependencies": {
+    "@remotetab/crypto": "workspace:*",
     "@remotetab/protocol": "workspace:*",
-    "@remotetab/webrtc": "workspace:*"
+    "@remotetab/webrtc": "workspace:*",
+    "qrcode-generator": "^2.0.4"
   }
 }

@@ -32,10 +32,13 @@ import {
   isSenderEvent,
   type OffscreenRequest,
   type OffscreenResponse,
+  type PairStartResponse,
   type SenderEvent,
   type SenderRequest,
   type StateResponse,
 } from '@/messages.ts';
+import { PairedDeviceStore } from '@/paired-devices.ts';
+import { PairingManager } from '@/pairing-manager.ts';
 import { ChromePowerAdapter } from '@/power-adapter.ts';
 import type { SessionError } from '@/session-state.ts';
 import {
@@ -54,6 +57,11 @@ export default defineBackground(() => {
   const store = new ChromeSessionStore(browser.storage.session);
   const settingsStore = new SettingsStore(browser.storage.local);
   const deviceStore = new DeviceIdentityStore(browser.storage.local);
+  const pairedDevices = new PairedDeviceStore(browser.storage.local);
+  /** Loaded once at SW start; async work below awaits it. */
+  const identityPromise = deviceStore.loadOrCreate();
+  /** Created once identity resolves; recreated never (identity is stable). */
+  let pairing: PairingManager | null = null;
 
   /** The one live WebRTC session being relayed (ephemeral, never persisted). */
   let activeSessionId: string | null = null;
@@ -62,6 +70,9 @@ export default defineBackground(() => {
   const power = new ChromePowerAdapter();
   /** One teardown pass per Remote Mode lifecycle; rebuilt at enable. */
   let teardown: TeardownOrchestrator | null = null;
+
+  /** Deferred result handed to the popup when pair.created confirms. */
+  let pairPayloadWaiter: ((r: PairStartResponse) => void) | null = null;
 
   // Narrow input authority: the ONLY path from peer frames to CDP.
   const inputService = new InputService(new CdpInputAdapter(), {
@@ -150,16 +161,27 @@ export default defineBackground(() => {
   }
 
   // -------------------------------------------------------------------------
-  // Signaling session flow (#007)
+  // Signaling session flow (#007) + pairing (#013)
   // -------------------------------------------------------------------------
 
+  function getPairing(
+    identity: Awaited<ReturnType<typeof deviceStore.loadOrCreate>>,
+  ): PairingManager {
+    if (pairing === null) {
+      pairing = new PairingManager({
+        identity,
+        devices: pairedDevices,
+        send: (frame) => signaling?.send(frame) ?? false,
+      });
+    }
+    return pairing;
+  }
+
   async function startSignaling(): Promise<void> {
-    const [settings, identity] = await Promise.all([
-      settingsStore.load(),
-      deviceStore.loadOrCreate(),
-    ]);
+    const [settings, identity] = await Promise.all([settingsStore.load(), identityPromise]);
     const servers =
       settings.iceUrls.length > 0 ? toIceServers(settings.iceUrls) : DEFAULT_ICE_SERVERS;
+    void getPairing(identity);
 
     signaling?.close();
     const client = new SignalingClient({
@@ -173,6 +195,7 @@ export default defineBackground(() => {
     });
     signaling = client;
     client.connect();
+    void identity;
   }
 
   function stopSignaling(): void {
@@ -205,7 +228,22 @@ export default defineBackground(() => {
     servers: RTCIceServer[],
   ): Promise<void> {
     const state = await store.load();
+    const identity = await identityPromise;
     switch (frame.type) {
+      case 'pair.created': {
+        const created = frame.payload as { pairId: string; expiresAtMs: number };
+        const result = getPairing(identity).onPairCreated(created.pairId, created.expiresAtMs);
+        if (result && pairPayloadWaiter) {
+          pairPayloadWaiter({ ok: true, payload: result.payload, expiresAtMs: result.expiresAtMs });
+          pairPayloadWaiter = null;
+        }
+        return;
+      }
+      case 'pair.join': {
+        const outcome = await getPairing(identity).onPairJoin(frame);
+        void outcome;
+        return;
+      }
       case 'session.request': {
         const req = sessionRequestSchema.parse(frame.payload);
         // M1 vertical slice: auto-accept while capturing, one session at a

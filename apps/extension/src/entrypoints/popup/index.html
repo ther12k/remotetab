@@ -127,9 +127,24 @@
       <div id="device-code" class="muted" style="font-family: monospace; word-break: break-all;">…</div>
     </section>
 
+    <section id="pair-section">
+      <div class="label">Pair phone</div>
+      <button type="button" id="pair-start">Pair phone…</button>
+      <div id="pair-qr-wrap" hidden>
+        <img id="pair-qr" alt="Pairing QR code" style="width:100%; image-rendering: pixelated; border-radius:8px;" />
+        <div class="muted" style="margin-top:6px;">
+          Scan with RemoteTab on your phone, or paste the code there.
+          Expires in <span id="pair-countdown">—</span>.
+        </div>
+        <div id="pair-code" class="muted" style="font-family: monospace; word-break: break-all; margin-top:4px;"></div>
+        <button type="button" id="pair-cancel" style="margin-top:6px;">Cancel pairing</button>
+      </div>
+      <div id="pair-done" class="muted" hidden></div>
+    </section>
+
     <section>
       <div class="label">Paired devices</div>
-      <div class="muted">Pairing arrives with the next milestone.</div>
+      <div id="paired-list" class="muted">No phones paired yet.</div>
     </section>
 
     <details>

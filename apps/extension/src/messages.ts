@@ -13,7 +13,10 @@ export type PopupRequest =
   | { type: 'enableRemote'; tabId: number; streamId: string }
   | { type: 'stopRemote' }
   | { type: 'getSettings' }
-  | { type: 'saveSettings'; signalingUrl: string; iceUrls: string[] };
+  | { type: 'saveSettings'; signalingUrl: string; iceUrls: string[] }
+  | { type: 'pairStart' }
+  | { type: 'pairCancel' }
+  | { type: 'pairedList' };
 
 export type StateResponse = {
   ok: boolean;
@@ -48,10 +51,18 @@ export function isPopupRequest(value: unknown): value is PopupRequest {
         v.iceUrls.length <= 16 &&
         v.iceUrls.every((u) => typeof u === 'string')
       );
+    case 'pairStart':
+    case 'pairCancel':
+    case 'pairedList':
+      return true;
     default:
       return false;
   }
 }
+
+export type PairStartResponse =
+  | { ok: true; payload: string; expiresAtMs: number }
+  | { ok: false; error: { code: string; message: string } };
 
 export type SettingsPayload = {
   signalingUrl: string;
