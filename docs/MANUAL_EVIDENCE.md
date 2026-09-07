@@ -36,3 +36,24 @@ bun run dev:mobile           # separate issue, not needed yet
    - [ ] Popup shows the "cannot be captured" message; state returns to Idle.
 
 Browser/OS used: _(fill in)_
+
+## #017 — TURN-only connectivity (needs-manual-evidence)
+
+1. Deploy `infra/coturn` (see infra/coturn/README.md) and set TURN_SECRET +
+   TURN_URLS on the signaling service.
+2. Enable Remote on the laptop, connect the phone with the external network.
+   - [ ] Diagnostics panel shows `transport: relay`.
+   - [ ] Same flow with TURN unreachable shows `direct` (fallback intact).
+
+## #020 — Release gate (needs-manual-evidence)
+
+- [ ] Neutral-page E2E pass on real phone (grid clicks, text, Enter, scroll)
+- [ ] Network-switch reconnect (Wi-Fi → mobile): input pauses, resumes after fresh proof
+- [ ] Revoke active phone: session ends + reconnect refused
+- [ ] 60-minute soak: no reconnect loop, no unbounded memory
+- [ ] Real ChatGPT visual test: harmless message typed via phone, response
+      observed as pixels only; logs/traffic contain no credentials or scraped
+      output
+- [ ] Stop releases debugger, keep-awake, tracks (chrome://media-internals)
+
+Browser/OS/phone used: _(fill in)_ — decision recorded in RELEASE.md

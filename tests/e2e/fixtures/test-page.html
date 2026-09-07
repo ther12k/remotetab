@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>RemoteTab neutral test page</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; display: flex; }
+      .col { padding: 24px; }
+      #scroll-region { width: 320px; height: 480px; overflow-y: scroll; border: 1px solid #ccc; }
+      #scroll-region .tall { height: 2000px; background: linear-gradient(#eef, #fee); position: relative; }
+      #marker { position: absolute; top: 400px; left: 20px; }
+      .grid { display: grid; grid-template-columns: repeat(6, 48px); gap: 8px; }
+      .cell { width: 48px; height: 48px; border: 1px solid #999; display: flex; align-items: center; justify-content: center; user-select: none; }
+      #events { font-family: monospace; white-space: pre; height: 200px; overflow: auto; border: 1px solid #ddd; }
+      input, textarea { display: block; margin-bottom: 8px; width: 280px; }
+    </style>
+  </head>
+  <body>
+    <div class="col">
+      <h1>Neutral test page</h1>
+      <input id="text-input" placeholder="text input" />
+      <textarea id="text-area" rows="3" placeholder="textarea"></textarea>
+      <button type="button" id="action-button">Action</button>
+      <div id="scroll-region">
+        <div class="tall"><div id="marker">marker at 400px</div></div>
+      </div>
+      <div>scrollTop: <span id="scroll-value">0</span></div>
+    </div>
+    <div class="col">
+      <div class="grid" id="grid"></div>
+      <h3>Event log (last 50)</h3>
+      <div id="events"></div>
+    </div>
+    <script>
+      // Click grid: 36 cells that log exact click coordinates + counts.
+      const grid = document.getElementById('grid');
+      const clicks = {};
+      for (let y = 0; y < 6; y++) {
+        for (let x = 0; x < 6; x++) {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.textContent = `${x},${y}`;
+          cell.addEventListener('click', (ev) => {
+            const key = `${x},${y}`;
+            clicks[key] = (clicks[key] ?? 0) + 1;
+            log(`click ${key} #${clicks[key]} @${Math.round(ev.offsetX)},${Math.round(ev.offsetY)}`);
+          });
+          grid.appendChild(cell);
+        }
+      }
+      const events = [];
+      function log(line) {
+        events.push(`${new Date().toISOString().slice(11, 23)} ${line}`);
+        if (events.length > 50) events.shift();
+        document.getElementById('events').textContent = events.join('\n');
+      }
+      document.getElementById('text-input').addEventListener('input', (e) => log(`input value="${e.target.value}"`));
+      document.getElementById('text-area').addEventListener('input', (e) => log(`textarea value="${e.target.value}"`));
+      document.getElementById('action-button').addEventListener('click', () => log('action clicked'));
+      document.getElementById('scroll-region').addEventListener('scroll', (e) => {
+        document.getElementById('scroll-value').textContent = String(Math.round(e.target.scrollTop));
+        log(`scroll ${Math.round(e.target.scrollTop)}`);
+      });
+      for (const type of ['keydown', 'keyup']) {
+        document.addEventListener(type, (e) => {
+          if (e.target.id === 'text-input' || e.target.id === 'text-area') {
+            log(`${type} key=${e.key} code=${e.code} modifiers=${e.ctrlKey ? 'C' : ''}${e.altKey ? 'A' : ''}${e.shiftKey ? 'S' : ''}${e.metaKey ? 'M' : ''}`);
+          }
+        });
+      }
+      window.__testState = { clicks, events };
+    </script>
+  </body>
+</html>
