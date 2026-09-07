@@ -40,6 +40,10 @@ export type PairedDesktop = {
   pairedAtMs: number;
 };
 
+export async function loadPhoneKeys(): Promise<PhoneKeyIdentity> {
+  return loadOrCreatePhoneKeys();
+}
+
 async function loadOrCreatePhoneKeys(): Promise<PhoneKeyIdentity> {
   const base = loadPhoneIdentity();
   try {
@@ -78,6 +82,10 @@ export async function listPairedDesktops(): Promise<PairedDesktop[]> {
   } catch {
     return [];
   }
+}
+
+export async function getPairedDesktop(deviceId: string): Promise<PairedDesktop | undefined> {
+  return (await listPairedDesktops()).find((d) => d.deviceId === deviceId);
 }
 
 export async function forgetDesktop(deviceId: string): Promise<void> {

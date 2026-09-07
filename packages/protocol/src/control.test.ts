@@ -293,6 +293,8 @@ describe('misc schemas', () => {
         'text.insert',
         'viewport.request',
         'viewport.sync',
+        'peer.challenge',
+        'peer.proof',
         'session.stop',
       ].sort(),
     );

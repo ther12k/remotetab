@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { peerChallengeSchema, peerProofSchema } from './auth.ts';
 import {
   decodeJsonFrame,
   envelopeBase,
@@ -120,6 +121,12 @@ export const controlMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('viewport.sync'),
     payload: viewportSyncSchema,
   }),
+  z.strictObject({
+    ...envelopeBase,
+    type: z.literal('peer.challenge'),
+    payload: peerChallengeSchema,
+  }),
+  z.strictObject({ ...envelopeBase, type: z.literal('peer.proof'), payload: peerProofSchema }),
   z.strictObject({ ...envelopeBase, type: z.literal('session.stop'), payload: sessionStopSchema }),
 ]);
 
@@ -136,6 +143,8 @@ export type ControlMessageType =
   | 'text.insert'
   | 'viewport.request'
   | 'viewport.sync'
+  | 'peer.challenge'
+  | 'peer.proof'
   | 'session.stop';
 export type ControlMessage = z.output<typeof controlMessageSchema>;
 export type ControlPayload<T extends ControlMessageType = ControlMessageType> = Extract<
@@ -153,6 +162,8 @@ export const CONTROL_MESSAGE_TYPES = [
   'text.insert',
   'viewport.request',
   'viewport.sync',
+  'peer.challenge',
+  'peer.proof',
   'session.stop',
 ] as const satisfies readonly ControlMessageType[];
 
@@ -241,6 +252,14 @@ export class ControlSender {
 
   viewportRequest() {
     return encodeControlFrame(this.frame('viewport.request', {}));
+  }
+
+  peerChallenge(nonce: string) {
+    return encodeControlFrame(this.frame('peer.challenge', { nonce, sessionId: this.sessionId }));
+  }
+
+  peerProof(proof: { deviceId: string; publicKeyFingerprint: string; signature: string }) {
+    return encodeControlFrame(this.frame('peer.proof', proof));
   }
 
   sessionStop(reason: z.output<typeof sessionStopReason>) {

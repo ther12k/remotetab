@@ -38,5 +38,11 @@ export {
   encodePairingPayload,
   type PairingPayloadV1,
 } from './pairing-payload.ts';
+export {
+  type HandshakeDeps,
+  type HandshakeOutcome,
+  type HandshakeRole,
+  PeerAuthHandshake,
+} from './peer-handshake.ts';
 export { randomBytes, timingSafeEqual } from './random.ts';
 export { encodeTranscript } from './transcript.ts';

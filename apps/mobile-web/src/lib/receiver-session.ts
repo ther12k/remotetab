@@ -2,12 +2,23 @@
  * Phone-side remote session: signaling (phone role) plus the receiving
  * RTCPeerHandle. Framework-agnostic so React only renders state snapshots.
  *
- * Phone flow: hello(phone) → hello.ok → session.request → session.accepted →
- * receive signal.offer → answer → ICE → control channel opens → ACTIVE.
+ * Phone flow: hello(phone) → session.request → accepted → offer/answer →
+ * ICE → control opens → MUTUAL PEER PROOF (#014) → ACTIVE. Input stays
+ * disabled until the laptop's signed proof verifies against the key stored
+ * at pairing time.
  */
 
+import type { HandshakeDeps } from '@remotetab/crypto';
+import {
+  base64urlToBytes,
+  bytesToBase64url,
+  importPrivateKeyPkcs8,
+  importPublicKeySpki,
+  PeerAuthHandshake,
+} from '@remotetab/crypto';
 import {
   ControlSender,
+  decodeControlFrame,
   decodeSignalingFrame,
   newRequestId,
   presencePingSchema,
@@ -18,6 +29,7 @@ import {
   signalingFrame,
 } from '@remotetab/protocol';
 import { RTCPeerHandle } from '@remotetab/webrtc';
+import { getPairedDesktop, loadPhoneKeys } from './pairing.ts';
 
 export type RemotePhase =
   | 'idle'
@@ -25,6 +37,7 @@ export type RemotePhase =
   | 'requesting'
   | 'signaling'
   | 'peer-connected'
+  | 'authenticating'
   | 'active'
   | 'reconnecting'
   | 'ended';
@@ -42,6 +55,8 @@ export type ReceiverEvents = {
   controlOpen: boolean;
   /** Schema-validated laptop→phone control frames (viewport.sync etc.). */
   controlMessage: string;
+  /** Target CSS viewport from viewport.sync frames. */
+  viewport: { cssWidth: number; cssHeight: number; deviceScaleFactor: number };
 };
 
 export class ReceiverSession {
@@ -54,6 +69,11 @@ export class ReceiverSession {
   private trackListeners = new Set<(t: MediaStreamTrack) => void>();
   private controlListeners = new Set<(open: boolean) => void>();
   private controlMessageListeners = new Set<(raw: string) => void>();
+  private viewportListeners = new Set<
+    (v: { cssWidth: number; cssHeight: number; deviceScaleFactor: number }) => void
+  >();
+  private handshake: PeerAuthHandshake | null = null;
+  private controlSender: ControlSender | null = null;
 
   constructor(
     private readonly opts: {
@@ -73,7 +93,11 @@ export class ReceiverSession {
         ? this.statusListeners
         : event === 'track'
           ? this.trackListeners
-          : this.controlListeners;
+          : event === 'controlOpen'
+            ? this.controlListeners
+            : event === 'controlMessage'
+              ? this.controlMessageListeners
+              : this.viewportListeners;
     set.add(handler as (p: unknown) => void);
     return () => {
       set.delete(handler as (p: unknown) => void);
@@ -158,6 +182,8 @@ export class ReceiverSession {
       }
       case 'session.accepted': {
         this.sessionIdValue = frame.value.payload.sessionId;
+        // One persistent phone→laptop sequence space per session (#014).
+        this.controlSender = new ControlSender(this.sessionIdValue);
         this.setStatus('signaling');
         this.openPeer();
         return;
@@ -246,14 +272,14 @@ export class ReceiverSession {
     });
     peer.on('control-open', () => {
       for (const handler of this.controlListeners) handler(true);
-      // Ask the laptop for the target viewport right away (issue #010).
-      this.sendControlFrame((s) => s.viewportRequest());
+      // Mutual peer proof BEFORE any control is accepted (#014).
+      void this.beginPeerAuth();
     });
     peer.on('control-close', () => {
       for (const handler of this.controlListeners) handler(false);
     });
     peer.on('control-message', (raw) => {
-      for (const handler of this.controlMessageListeners) handler(raw);
+      this.onControlFrame(raw);
     });
     peer.on('icecandidate', (candidate) => {
       if (!candidate || !this.sessionIdValue) return;
@@ -281,11 +307,95 @@ export class ReceiverSession {
     return this.peer?.sendControl(text) ?? false;
   }
 
-  /** Encode + send a laptop→phone control frame for the active session. */
+  /**
+   * Encode + send a phone→laptop control frame using the ONE persistent
+   * per-session sequence space (multiple throwaway senders would reset the
+   * seq counter and trip the laptop's replay guard).
+   */
   sendControlFrame(build: (sender: ControlSender) => string): boolean {
+    const sender = this.controlSender;
+    if (sender === null || this.sessionIdValue === null) return false;
+    return this.peer?.sendControl(build(sender)) ?? false;
+  }
+
+  /** Parse one laptop frame: peer-auth vs viewport sync. */
+  private onControlFrame(raw: string): void {
+    for (const handler of this.controlMessageListeners) handler(raw);
+    const parsed = decodeControlFrame(raw);
+    if (!parsed.ok) return;
+    if (parsed.value.type === 'peer.challenge') {
+      this.handshake?.onChallenge(parsed.value.payload.nonce);
+      return;
+    }
+    if (parsed.value.type === 'peer.proof') {
+      void this.handshake?.onProof(parsed.value.payload.signature).then((outcome) => {
+        if (outcome === 'verified') {
+          this.setStatus('active');
+        } else if (outcome === 'failed') {
+          this.setStatus('reconnecting', 'Peer verification failed.');
+        }
+      });
+      return;
+    }
+    if (parsed.value.type === 'viewport.sync') {
+      const v = parsed.value.payload;
+      for (const handler of this.viewportListeners) handler(v);
+    }
+  }
+
+  /**
+   * Mutual peer proof (issue #014). The phone verifies the laptop against
+   * the stored desktop key; the laptop independently verifies the phone.
+   * Control stays disabled until BOTH sides have verified.
+   */
+  private async beginPeerAuth(): Promise<void> {
     const sessionId = this.sessionIdValue;
-    if (sessionId === null) return false;
-    return this.peer?.sendControl(build(new ControlSender(sessionId))) ?? false;
+    if (sessionId === null) return;
+    const desktop = await getPairedDesktop(this.opts.desktopDeviceId);
+    if (!desktop) {
+      this.setStatus(
+        'ended',
+        'This laptop is not paired with this phone. Pair again via QR.',
+        'error',
+      );
+      this.cleanup();
+      return;
+    }
+    const keys = await loadPhoneKeys();
+    const priv = await importPrivateKeyPkcs8(base64urlToBytes(keys.privateKeyPkcs8));
+    const pub = await importPublicKeySpki(base64urlToBytes(desktop.publicKeySpki));
+    const SIGN = { name: 'ECDSA', hash: 'SHA-256' } as const;
+    const deps: HandshakeDeps = {
+      role: 'phone',
+      protocolVersion: '1',
+      sessionId,
+      myDeviceId: keys.deviceId,
+      peerDeviceId: desktop.deviceId,
+      myFingerprint: keys.fingerprint,
+      peerFingerprint: desktop.fingerprint,
+      sign: async (t) => bytesToBase64url(new Uint8Array(await crypto.subtle.sign(SIGN, priv, t))),
+      verify: (t, sig) =>
+        crypto.subtle.verify(SIGN, pub, base64urlToBytes(sig) as Uint8Array<ArrayBuffer>, t),
+      sendChallenge: (nonce) => {
+        this.sendControlFrame((s) => s.peerChallenge(nonce));
+      },
+      sendProof: (sig) => {
+        this.sendControlFrame((s) =>
+          s.peerProof({
+            deviceId: keys.deviceId,
+            publicKeyFingerprint: keys.fingerprint,
+            signature: sig,
+          }),
+        );
+      },
+      timeoutMs: 10_000,
+      onTimeout: () => {
+        this.setStatus('reconnecting', 'Peer verification timed out. Retrying…');
+      },
+    };
+    this.handshake = new PeerAuthHandshake(deps);
+    this.setStatus('authenticating');
+    this.handshake.start();
   }
 
   private send(frame: SignalingMessage): boolean {
@@ -316,6 +426,8 @@ export class ReceiverSession {
 
   private cleanup(): void {
     this.stopPings();
+    this.handshake = null;
+    this.controlSender = null;
     this.closePeer();
     this.sessionIdValue = null;
     const socket = this.socket;

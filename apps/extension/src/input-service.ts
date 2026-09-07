@@ -13,6 +13,7 @@
 import {
   acceptControlFrame,
   type ControlMessage,
+  type ControlPayload,
   encodeControlFrame,
   ProtocolError,
   SequenceGuard,
@@ -22,6 +23,10 @@ import type { RemoteInputAdapter } from '@/input-adapter.ts';
 export type InputDispatchResult =
   | { ok: true; action: string }
   | { ok: false; code: string; message: string };
+
+export type PeerAuthDelegate = (
+  message: ControlMessage,
+) => Promise<'verified' | 'failed' | 'pending' | null>;
 
 export interface ControlSender {
   /** Deliver a control frame to the phone; false when the channel is down. */
@@ -36,13 +41,25 @@ export class InputService {
   constructor(
     private readonly adapter: RemoteInputAdapter,
     private readonly sender: ControlSender,
+    private readonly onPeerAuth?: PeerAuthDelegate,
   ) {}
 
-  /** Arm input for a session: attach the debugger and sync the viewport. */
-  async start(sessionId: string, tabId: number): Promise<void> {
-    await this.stop();
+  /** Arm the session guard WITHOUT touching the debugger (pre-auth). */
+  begin(sessionId: string): void {
     this.guard = new SequenceGuard();
     this.sessionId = sessionId;
+    this.attached = false;
+  }
+
+  /** Full arm for an authenticated session: attach debugger + sync viewport. */
+  async start(sessionId: string, tabId: number): Promise<void> {
+    await this.stop();
+    this.begin(sessionId);
+    await this.attachTo(tabId);
+  }
+
+  /** Attach the debugger and push viewport.sync (called after peer proof). */
+  async attachTo(tabId: number): Promise<void> {
     await this.adapter.attach(tabId);
     this.attached = true;
     await this.syncViewport();
@@ -64,6 +81,30 @@ export class InputService {
 
   /** Laptop→phone frames use their own sequence space (schema-clean). */
   private laptopSeq = 0;
+
+  /**
+   * Build ANY laptop→phone control frame (viewport.sync, peer.*) with the
+   * shared monotonic laptop sequence. Peer handlers use this so auth frames
+   * and viewport frames stay ordered for the phone's sequence guard.
+   */
+  buildLaptopFrame<T extends 'viewport.sync' | 'peer.challenge' | 'peer.proof'>(
+    type: T,
+    payload: ControlPayload<T>,
+  ): string {
+    this.laptopSeq += 1;
+    return encodeControlFrame({
+      v: 1,
+      sessionId: this.sessionId ?? '',
+      seq: this.laptopSeq,
+      ts: Date.now(),
+      type,
+      payload,
+    } as ControlMessage);
+  }
+
+  get currentSessionId(): string | null {
+    return this.sessionId;
+  }
 
   private async syncViewport(): Promise<void> {
     const viewport = await this.adapter.getViewport();
@@ -91,22 +132,12 @@ export class InputService {
     phase: string,
     targetTabId: number | null,
   ): Promise<InputDispatchResult> {
-    if (!this.armed || this.sessionId !== sessionId || this.guard === null) {
+    if (this.sessionId !== sessionId || this.guard === null) {
       return {
         ok: false,
         code: 'INPUT_NOT_ATTACHED',
         message: 'Remote input is not attached to this session.',
       };
-    }
-    if (phase !== 'remote-active') {
-      return {
-        ok: false,
-        code: 'INPUT_NOT_ATTACHED',
-        message: 'Remote input is paused until the session is active.',
-      };
-    }
-    if (targetTabId === null) {
-      return { ok: false, code: 'TARGET_TAB_CLOSED', message: 'The remote tab is gone.' };
     }
 
     // Envelope + seq + session — strict, replay-safe.
@@ -124,6 +155,30 @@ export class InputService {
           ? 'Input frames were rejected as replayed.'
           : 'Input frame failed validation.';
       return { ok: false, code, message: message2 };
+    }
+
+    // Peer-auth frames bypass input gating: they ARE the gate (#014).
+    if (message.type === 'peer.challenge' || message.type === 'peer.proof') {
+      const outcome = (await this.onPeerAuth?.(message)) ?? 'failed';
+      return { ok: true, action: `peer.${outcome}` };
+    }
+
+    if (phase !== 'remote-active') {
+      return {
+        ok: false,
+        code: 'INPUT_NOT_ATTACHED',
+        message: 'Remote input is paused until the session is active.',
+      };
+    }
+    if (targetTabId === null) {
+      return { ok: false, code: 'TARGET_TAB_CLOSED', message: 'The remote tab is gone.' };
+    }
+    if (!this.attached) {
+      return {
+        ok: false,
+        code: 'INPUT_NOT_ATTACHED',
+        message: 'Remote input lost its debugger attachment.',
+      };
     }
 
     try {

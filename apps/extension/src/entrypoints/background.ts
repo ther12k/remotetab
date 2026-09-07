@@ -9,6 +9,12 @@
  */
 
 import {
+  base64urlToBytes,
+  bytesToBase64url,
+  importPublicKeySpki,
+  PeerAuthHandshake,
+} from '@remotetab/crypto';
+import {
   newSessionId,
   type SignalingMessage,
   sessionAcceptedSchema,
@@ -23,7 +29,7 @@ import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { CdpInputAdapter } from '@/cdp-input.ts';
 import { DeviceIdentityStore } from '@/device.ts';
-import { type ControlSender, InputService } from '@/input-service.ts';
+import { type ControlSender, InputService, type PeerAuthDelegate } from '@/input-service.ts';
 import {
   isOffscreenEvent,
   isOffscreenRequest,
@@ -65,6 +71,8 @@ export default defineBackground(() => {
 
   /** The one live WebRTC session being relayed (ephemeral, never persisted). */
   let activeSessionId: string | null = null;
+  let activePhoneDeviceId: string | null = null;
+  let handshake: PeerAuthHandshake | null = null;
   let signaling: SignalingClient | null = null;
   let signalingState: SignalingState = 'offline';
   const power = new ChromePowerAdapter();
@@ -74,14 +82,44 @@ export default defineBackground(() => {
   /** Deferred result handed to the popup when pair.created confirms. */
   let pairPayloadWaiter: ((r: PairStartResponse) => void) | null = null;
 
+  function sendLaptopFrame(raw: string): boolean {
+    if (activeSessionId === null) return false;
+    void sendToOffscreen({ type: 'sender:sendControl', sessionId: activeSessionId, raw });
+    return true;
+  }
+
+  async function onPeerVerified(): Promise<void> {
+    handshake = null;
+    const state = await store.load();
+    if (state.phase !== 'authenticating') return;
+    await store.save(transition(state, { type: 'remote-active', nowMs: Date.now() }));
+    if (state.targetTabId === null) return;
+    try {
+      await inputService.attachTo(state.targetTabId);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Remote input could not attach to this tab.';
+      await stopRemoteSession('user', { code: 'INPUT_NOT_ATTACHED', message });
+    }
+  }
+
   // Narrow input authority: the ONLY path from peer frames to CDP.
-  const inputService = new InputService(new CdpInputAdapter(), {
-    send(raw: string): boolean {
-      if (activeSessionId === null) return false;
-      void sendToOffscreen({ type: 'sender:sendControl', sessionId: activeSessionId, raw });
-      return true;
-    },
-  } satisfies ControlSender);
+  const controlSender: ControlSender = {
+    send: (raw: string): boolean => sendLaptopFrame(raw),
+  };
+  const peerAuthDelegate: PeerAuthDelegate = async (message) => {
+    if (message.type === 'peer.challenge') {
+      handshake?.onChallenge(message.payload.nonce);
+      return 'pending';
+    }
+    if (message.type === 'peer.proof') {
+      const outcome = (await handshake?.onProof(message.payload.signature)) ?? 'failed';
+      if (outcome === 'verified') await onPeerVerified();
+      return outcome;
+    }
+    return null;
+  };
+  const inputService = new InputService(new CdpInputAdapter(), controlSender, peerAuthDelegate);
 
   // A debugger detach (DevTools opened on the tab, crash, etc.) must never
   // leave input armed (fail closed).
@@ -259,6 +297,7 @@ export default defineBackground(() => {
           phoneDeviceId: req.deviceId,
         });
         activeSessionId = sessionId;
+        activePhoneDeviceId = req.deviceId;
         await store.save(transition(state, { type: 'peer-connected', nowMs: Date.now() }));
         signaling?.send(signalingFrame('session.accepted', accepted));
         await sendToOffscreen(
@@ -344,29 +383,66 @@ export default defineBackground(() => {
         return;
       case 'sender:channelState':
         if (event.open && state.phase === 'peer-connected') {
-          // M1 vertical slice: control open → remote-active. Peer auth
-          // (#014) will gate this transition before any release.
-          await store.save(transition(state, { type: 'remote-active', nowMs: Date.now() }));
-          try {
-            if (state.targetTabId !== null) {
-              await inputService.start(event.sessionId, state.targetTabId);
-            }
-          } catch (err) {
-            // Fail closed: input that cannot attach ends Remote Mode with a
-            // readable message instead of staying half-armed.
-            const message =
-              err instanceof Error ? err.message : 'Remote input could not attach to this tab.';
-            const failed = transition(state, {
-              type: 'fail',
-              code: 'INPUT_NOT_ATTACHED',
-              message,
-              nowMs: Date.now(),
+          // Control open → AUTHENTICATING. Input arms only after the mutual
+          // peer proof verifies (issue #014).
+          await store.save(transition(state, { type: 'authenticating', nowMs: Date.now() }));
+          await inputService.begin(event.sessionId);
+          const identity = await identityPromise;
+          const phone =
+            activePhoneDeviceId !== null
+              ? (await pairedDevices.list()).find((d) => d.deviceId === activePhoneDeviceId)
+              : undefined;
+          if (!phone) {
+            await stopRemoteSession('user', {
+              code: 'PEER_AUTH_FAILED',
+              message: 'This phone is not paired anymore. Pair again from the popup.',
             });
-            const stopped = transition(failed, { type: 'stopped', nowMs: Date.now() });
-            await store.save(stopped);
-            stopSignaling();
-            void closeOffscreenDocument();
+            return;
           }
+          const priv = await deviceStore.importPrivateKey(identity);
+          const pub = await importPublicKeySpki(base64urlToBytes(phone.publicKeySpki));
+          const SIGN_ALG = { name: 'ECDSA', hash: 'SHA-256' } as const;
+          handshake = new PeerAuthHandshake({
+            role: 'desktop',
+            protocolVersion: '1',
+            sessionId: event.sessionId,
+            myDeviceId: identity.deviceId,
+            peerDeviceId: phone.deviceId,
+            myFingerprint: identity.fingerprint,
+            peerFingerprint: phone.publicKeyFingerprint,
+            sign: async (t) =>
+              bytesToBase64url(new Uint8Array(await crypto.subtle.sign(SIGN_ALG, priv, t))),
+            verify: (t, sig) =>
+              crypto.subtle.verify(
+                SIGN_ALG,
+                pub,
+                base64urlToBytes(sig) as Uint8Array<ArrayBuffer>,
+                t,
+              ),
+            sendChallenge: (nonce) => {
+              sendLaptopFrame(
+                inputService.buildLaptopFrame('peer.challenge', {
+                  nonce,
+                  sessionId: event.sessionId,
+                }),
+              );
+            },
+            sendProof: (sig) => {
+              sendLaptopFrame(
+                inputService.buildLaptopFrame('peer.proof', {
+                  deviceId: identity.deviceId,
+                  publicKeyFingerprint: identity.fingerprint,
+                  signature: sig,
+                }),
+              );
+            },
+            timeoutMs: 10_000,
+            onTimeout: () => {
+              handshake = null;
+              void teardownSession();
+            },
+          });
+          handshake.start();
         } else if (!event.open && state.phase === 'remote-active') {
           await store.save(transition(state, { type: 'reconnecting', nowMs: Date.now() }));
         }
@@ -399,6 +475,8 @@ export default defineBackground(() => {
 
   /** Tear the WebRTC session down while keeping Remote Mode enabled. */
   async function teardownSession(): Promise<void> {
+    handshake = null;
+    activePhoneDeviceId = null;
     if (activeSessionId) {
       await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
     }
@@ -501,6 +579,8 @@ export default defineBackground(() => {
         name: 'state',
         run: async () => {
           activeSessionId = null;
+          activePhoneDeviceId = null;
+          handshake = null;
           const current = await store.load();
           const stopped = transition(current, { type: 'stopped', nowMs: Date.now() });
           await store.save(stopped);
