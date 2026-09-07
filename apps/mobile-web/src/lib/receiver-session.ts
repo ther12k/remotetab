@@ -7,6 +7,7 @@
  */
 
 import {
+  ControlSender,
   decodeSignalingFrame,
   newRequestId,
   presencePingSchema,
@@ -39,17 +40,20 @@ export type ReceiverEvents = {
   status: RemoteStatus;
   track: MediaStreamTrack;
   controlOpen: boolean;
+  /** Schema-validated laptop→phone control frames (viewport.sync etc.). */
+  controlMessage: string;
 };
 
 export class ReceiverSession {
   private socket: WebSocket | null = null;
   private peer: RTCPeerHandle | null = null;
-  private sessionId: string | null = null;
+  private sessionIdValue: string | null = null;
   private phase: RemotePhase = 'idle';
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private statusListeners = new Set<(s: RemoteStatus) => void>();
   private trackListeners = new Set<(t: MediaStreamTrack) => void>();
   private controlListeners = new Set<(open: boolean) => void>();
+  private controlMessageListeners = new Set<(raw: string) => void>();
 
   constructor(
     private readonly opts: {
@@ -88,6 +92,11 @@ export class ReceiverSession {
 
   get currentPhase(): RemotePhase {
     return this.phase;
+  }
+
+  /** The accepted session id, or null before acceptance. */
+  get sessionId(): string | null {
+    return this.sessionIdValue;
   }
 
   connect(): void {
@@ -148,7 +157,7 @@ export class ReceiverSession {
         return;
       }
       case 'session.accepted': {
-        this.sessionId = frame.value.payload.sessionId;
+        this.sessionIdValue = frame.value.payload.sessionId;
         this.setStatus('signaling');
         this.openPeer();
         return;
@@ -167,13 +176,13 @@ export class ReceiverSession {
         return;
       }
       case 'signal.offer': {
-        if (frame.value.payload.sessionId !== this.sessionId || !this.peer) return;
+        if (frame.value.payload.sessionId !== this.sessionIdValue || !this.peer) return;
         void this.peer
           .acceptOffer({ type: 'offer', sdp: frame.value.payload.sdp })
           .then((answer) => {
             this.send(
               signalingFrame('signal.answer', {
-                sessionId: this.sessionId ?? '',
+                sessionId: this.sessionIdValue ?? '',
                 sdp: answer.sdp ?? '',
               }),
             );
@@ -183,7 +192,7 @@ export class ReceiverSession {
       }
       case 'signal.ice': {
         const ice = signalIceSchema.parse(frame.value.payload);
-        if (ice.sessionId !== this.sessionId || !ice.candidate || !this.peer) return;
+        if (ice.sessionId !== this.sessionIdValue || !ice.candidate || !this.peer) return;
         void this.peer
           .addIceCandidate({
             candidate: ice.candidate,
@@ -197,7 +206,7 @@ export class ReceiverSession {
         return;
       }
       case 'session.close': {
-        if (frame.value.payload.sessionId !== this.sessionId) return;
+        if (frame.value.payload.sessionId !== this.sessionIdValue) return;
         const reason = frame.value.payload.reason;
         this.setStatus(
           'ended',
@@ -237,15 +246,20 @@ export class ReceiverSession {
     });
     peer.on('control-open', () => {
       for (const handler of this.controlListeners) handler(true);
+      // Ask the laptop for the target viewport right away (issue #010).
+      this.sendControlFrame((s) => s.viewportRequest());
     });
     peer.on('control-close', () => {
       for (const handler of this.controlListeners) handler(false);
     });
+    peer.on('control-message', (raw) => {
+      for (const handler of this.controlMessageListeners) handler(raw);
+    });
     peer.on('icecandidate', (candidate) => {
-      if (!candidate || !this.sessionId) return;
+      if (!candidate || !this.sessionIdValue) return;
       this.send(
         signalingFrame('signal.ice', {
-          sessionId: this.sessionId,
+          sessionId: this.sessionIdValue ?? '',
           candidate: candidate.candidate ?? '',
           sdpMid: candidate.sdpMid ?? null,
           sdpMLineIndex: candidate.sdpMLineIndex ?? null,
@@ -265,6 +279,13 @@ export class ReceiverSession {
   /** Relay one control frame; false when the channel is not usable. */
   sendControl(text: string): boolean {
     return this.peer?.sendControl(text) ?? false;
+  }
+
+  /** Encode + send a laptop→phone control frame for the active session. */
+  sendControlFrame(build: (sender: ControlSender) => string): boolean {
+    const sessionId = this.sessionIdValue;
+    if (sessionId === null) return false;
+    return this.peer?.sendControl(build(new ControlSender(sessionId))) ?? false;
   }
 
   private send(frame: SignalingMessage): boolean {
@@ -296,7 +317,7 @@ export class ReceiverSession {
   private cleanup(): void {
     this.stopPings();
     this.closePeer();
-    this.sessionId = null;
+    this.sessionIdValue = null;
     const socket = this.socket;
     this.socket = null;
     if (socket) {

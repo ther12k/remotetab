@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Mode } from '../lib/gesture.ts';
 import type { ReceiverSession, RemoteStatus } from '../lib/receiver-session.ts';
+import { TouchBridge } from '../lib/touch-bridge.ts';
 
 /**
- * Viewer screen: remote video + connection status chip. Input gestures
- * (touch/keyboard) arrive with issues #010/#011 — this issue establishes the
- * measurable rendered-content rectangle they depend on.
+ * Viewer screen: remote video + connection status + input modes. Touch and
+ * keyboard input (issue #011) only flow while the control channel is open.
  */
 export function Viewer(props: {
   session: ReceiverSession | null;
@@ -14,7 +15,10 @@ export function Viewer(props: {
 }) {
   const { session, status, controlOpen, onDisconnect } = props;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const bridgeRef = useRef<TouchBridge | null>(null);
   const [trackInfo, setTrackInfo] = useState<{ w: number; h: number } | null>(null);
+  const [mode, setMode] = useState<Mode>('pointer');
 
   useEffect(() => {
     if (!session) return;
@@ -31,8 +35,23 @@ export function Viewer(props: {
     return off;
   }, [session]);
 
+  // Attach the touch bridge once both video and wrap exist; re-arm on mode change.
+  useEffect(() => {
+    const video = videoRef.current;
+    const wrap = wrapRef.current;
+    if (!session || !video || !wrap) return;
+    const bridge = new TouchBridge({ element: wrap, video, session, mode });
+    bridgeRef.current = bridge;
+    bridge.setChannelOpen(controlOpen);
+    const dispose = bridge.attach();
+    return () => {
+      dispose();
+      bridgeRef.current = null;
+    };
+  }, [session, mode, controlOpen]);
+
   const onFullscreen = useCallback(() => {
-    const el = videoRef.current?.parentElement;
+    const el = wrapRef.current;
     if (el && document.fullscreenEnabled) {
       void el.requestFullscreen().catch(() => undefined);
     }
@@ -56,7 +75,7 @@ export function Viewer(props: {
         </button>
       </header>
 
-      <div className="video-wrap">
+      <div className="video-wrap" ref={wrapRef}>
         <video ref={videoRef} playsInline autoPlay muted className="remote-video" />
         {status.phase === 'reconnecting' && (
           <div className="overlay">
@@ -72,15 +91,33 @@ export function Viewer(props: {
       </div>
 
       <footer>
-        <button type="button" onClick={onFullscreen}>
-          Fullscreen
+        <div className="modes" role="tablist" aria-label="Input mode">
+          <button
+            type="button"
+            className={mode === 'pointer' ? 'mode selected' : 'mode'}
+            onClick={() => setMode('pointer')}
+          >
+            Pointer
+          </button>
+          <button
+            type="button"
+            className={mode === 'scroll' ? 'mode selected' : 'mode'}
+            onClick={() => setMode('scroll')}
+          >
+            Scroll
+          </button>
+        </div>
+        <button type="button" onClick={onFullscreen} aria-label="Fullscreen">
+          ⛶
         </button>
         <details className="diag">
-          <summary>Diagnostics</summary>
+          <summary>Diag</summary>
           <code>
             phase: {status.phase}
             <br />
             control: {controlOpen ? 'open' : 'closed'}
+            <br />
+            mode: {mode}
             <br />
             video: {trackInfo ? `${trackInfo.w}×${trackInfo.h}` : '—'}
           </code>
