@@ -28,7 +28,8 @@
     "build:mobile": "cd apps/mobile-web && bun run build",
     "dev:signaling": "bun --cwd apps/signaling run dev",
     "dev:extension": "cd apps/extension && bun run dev",
-    "dev:mobile": "cd apps/mobile-web && bun run dev"
+    "dev:mobile": "cd apps/mobile-web && bun run dev",
+    "gate": "bun run lint && bun run typecheck && bun run test && bun run test:signaling && bun run test:security-scan && bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

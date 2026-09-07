@@ -10,7 +10,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 
 // Directory prefixes scanned (source + built output). Docs intentionally excluded:
 // they legitimately name forbidden APIs when describing the policy.
-const SCAN_DIRS = ['apps', 'packages', 'scripts'];
+const SCAN_DIRS = ['apps', 'packages', 'scripts', 'tests/e2e/fixtures'];
 const TEST_HINT = /(test|spec)\.[tj]sx?$/;
 
 // [token, reason] — this file itself is excluded from scanning below because it
