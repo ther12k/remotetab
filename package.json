@@ -1,0 +1,38 @@
+{
+  "name": "remotetab",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "description": "RemoteTab: control one Chrome tab from a paired phone PWA over WebRTC.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "bun run typecheck:packages && bun run typecheck:signaling",
+    "typecheck:packages": "tsc --noEmit -p packages/protocol && tsc --noEmit -p packages/crypto && tsc --noEmit -p packages/webrtc && tsc --noEmit -p packages/config && tsc --noEmit -p packages/testkit",
+    "typecheck:signaling": "tsc --noEmit -p apps/signaling",
+    "typecheck:extension": "bun --cwd apps/extension run prepare:types && tsc --noEmit -p apps/extension",
+    "typecheck:mobile": "tsc --noEmit -p apps/mobile-web",
+    "test": "vitest run",
+    "test:signaling": "bun test apps/signaling",
+    "test:security-scan": "node scripts/security-scan.mjs",
+    "build": "bun run --filter '*' build",
+    "build:extension": "bun --cwd apps/extension run build",
+    "build:mobile": "bun --cwd apps/mobile-web run build",
+    "dev:signaling": "bun --cwd apps/signaling run dev",
+    "dev:extension": "bun --cwd apps/extension run dev",
+    "dev:mobile": "bun --cwd apps/mobile-web run dev"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

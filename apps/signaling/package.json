@@ -1,0 +1,15 @@
+{
+  "name": "@remotetab/signaling",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "start": "bun run src/main.ts",
+    "build": "tsc --noEmit -p .",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.2"
+  }
+}
