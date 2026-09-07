@@ -25,10 +25,10 @@
     "test:security-scan": "node scripts/security-scan.mjs",
     "build": "bun run --filter '*' build",
     "build:extension": "cd apps/extension && bun run build",
-    "build:mobile": "bun --cwd apps/mobile-web run build",
+    "build:mobile": "cd apps/mobile-web && bun run build",
     "dev:signaling": "bun --cwd apps/signaling run dev",
     "dev:extension": "cd apps/extension && bun run dev",
-    "dev:mobile": "bun --cwd apps/mobile-web run dev"
+    "dev:mobile": "cd apps/mobile-web && bun run dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

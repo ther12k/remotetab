@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="t d"><title id="t">RemoteTab</title><desc id="d">A tab streaming to a phone.</desc>
+  <rect width="512" height="512" rx="96" fill="#0b0f14"/>
+  <rect x="96" y="136" width="320" height="208" rx="20" fill="none" stroke="#2563eb" stroke-width="24"/>
+  <rect x="216" y="376" width="80" height="18" rx="9" fill="#8b98a5"/>
+  <circle cx="256" cy="240" r="42" fill="#2563eb"/>
+  <path d="M256 176a64 64 0 0 1 64 64" fill="none" stroke="#8b98a5" stroke-width="16" stroke-linecap="round"/>
+  <path d="M256 144a96 96 0 0 1 96 96" fill="none" stroke="#8b98a5" stroke-width="16" stroke-linecap="round"/>
+</svg>
