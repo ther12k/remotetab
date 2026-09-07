@@ -13,6 +13,12 @@
  */
 
 import {
+  base64urlToBytes,
+  bytesToBase64url,
+  encodeTranscript,
+  importPublicKeySpki,
+} from '@remotetab/crypto';
+import {
   decodeSignalingFrame,
   type ErrorCode,
   newPairId,
@@ -20,7 +26,9 @@ import {
   type SignalingMessage,
   signalingErrorFrame,
   signalingFrame,
+  WS_AUTH_DOMAIN,
 } from '@remotetab/protocol';
+import type { DeviceRegistry } from './device-registry.ts';
 import type { Logger } from './logger.ts';
 import type {
   ConnectionRegistry,
@@ -33,14 +41,21 @@ export const WS_CLOSE_NORMAL = 1000;
 export const WS_CLOSE_PROTOCOL_ERROR = 1002;
 export const WS_CLOSE_POLICY = 1008;
 
+export type DeviceAuthMode = 'open' | 'required';
+
 export type RouterDeps = {
   registry: ConnectionRegistry;
   pairings: PairingRepo;
   sessions: SessionRepo;
+  devices: DeviceRegistry;
   log: Logger;
   nowMs: () => number;
   pairingTtlSeconds: number;
+  deviceAuthMode: DeviceAuthMode;
 };
+
+const WS_SIGN_ALG = { name: 'ECDSA', hash: 'SHA-256' } as const;
+const MAX_AUTH_FAILURES = 5;
 
 export type InboundResult = {
   /** true when the connection must be closed after this frame. */
@@ -56,9 +71,16 @@ type SessionRequest = {
   frame: Extract<SignalingMessage, { type: 'session.request' }>;
 };
 
+async function sha256Fingerprint(spkiB64: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', base64urlToBytes(spkiB64)));
+  return bytesToBase64url(digest.slice(0, 16));
+}
+
 export class SignalingRouter {
   private readonly handles = new Map<string, SignalingConnection>();
   private readonly sessionRequests = new Map<string, SessionRequest>();
+  private readonly authenticated = new Set<string>();
+  private readonly pendingAuth = new Map<string, { nonce: string; failures: number }>();
 
   constructor(private readonly deps: RouterDeps) {}
 
@@ -88,7 +110,7 @@ export class SignalingRouter {
   }
 
   /** Decode + route one text frame. Returns whether to close the socket. */
-  handleFrame(conn: SignalingConnection, raw: string): InboundResult {
+  async handleFrame(conn: SignalingConnection, raw: string): Promise<InboundResult> {
     const parsed = decodeSignalingFrame(raw);
     if (!parsed.ok) {
       this.sendError(conn, parsed.error.code, parsed.error.message);
@@ -97,11 +119,12 @@ export class SignalingRouter {
     return this.dispatch(conn, parsed.value);
   }
 
-  dispatch(conn: SignalingConnection, frame: SignalingMessage): InboundResult {
+  async dispatch(conn: SignalingConnection, frame: SignalingMessage): Promise<InboundResult> {
     const reg = this.deps.registry.get(conn.connId);
     if (!reg) return FATAL(WS_CLOSE_POLICY);
 
     if (frame.type === 'hello') return this.onHello(conn, frame);
+    if (frame.type === 'auth.proof') return await this.onAuthProof(conn, frame);
     if (reg.role === null || reg.deviceId === null) {
       this.sendError(conn, 'MESSAGE_INVALID', 'hello required before other messages');
       return FATAL(WS_CLOSE_PROTOCOL_ERROR);
@@ -170,13 +193,105 @@ export class SignalingRouter {
         ),
       ),
     );
+    // Device auth (#018): challenge the hello identity; the proof binds the
+    // connection to the device key registered on success.
+    this.pendingAuth.set(conn.connId, {
+      nonce: bytesToBase64url(crypto.getRandomValues(new Uint8Array(16))),
+      failures: 0,
+    });
+    conn.send(
+      JSON.stringify(
+        signalingFrame('auth.challenge', { nonce: this.pendingAuth.get(conn.connId)?.nonce ?? '' }),
+      ),
+    );
     return OK;
+  }
+
+  private async onAuthProof(
+    conn: SignalingConnection,
+    frame: Extract<SignalingMessage, { type: 'auth.proof' }>,
+  ): Promise<InboundResult> {
+    const pending = this.pendingAuth.get(conn.connId);
+    const reg = this.deps.registry.get(conn.connId);
+    if (!pending || !reg?.deviceId) {
+      this.sendError(conn, 'MESSAGE_INVALID', 'no pending auth challenge');
+      return FATAL(WS_CLOSE_PROTOCOL_ERROR);
+    }
+    const deviceId = reg.deviceId;
+    const proof = frame.payload;
+    // The claimed fingerprint must match the presented key.
+    const fp = await sha256Fingerprint(proof.publicKeySpki);
+    if (fp !== proof.publicKeyFingerprint) {
+      return this.authFailure(conn, deviceId, 'fingerprint mismatch');
+    }
+    if (this.deps.devices.isRevoked(deviceId)) {
+      this.sendError(conn, 'DEVICE_REVOKED', undefined);
+      return FATAL(WS_CLOSE_POLICY);
+    }
+    let ok = false;
+    try {
+      const pub = await importPublicKeySpki(base64urlToBytes(proof.publicKeySpki));
+      const transcript = encodeTranscript([WS_AUTH_DOMAIN, '1', pending.nonce, deviceId]);
+      ok = await crypto.subtle.verify(
+        WS_SIGN_ALG,
+        pub,
+        base64urlToBytes(proof.signature),
+        transcript,
+      );
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      return this.authFailure(conn, deviceId, 'invalid signature');
+    }
+    const alreadyKnown = this.deps.devices.get(deviceId) !== undefined;
+    this.deps.devices.register(
+      deviceId,
+      proof.publicKeySpki,
+      proof.publicKeyFingerprint,
+      proof.displayName,
+    );
+    this.pendingAuth.delete(conn.connId);
+    this.authenticated.add(conn.connId);
+    this.deps.log.info('device.authenticated', {
+      connId: conn.connId,
+      deviceId,
+      registered: !alreadyKnown,
+    });
+    conn.send(
+      JSON.stringify(
+        signalingFrame('auth.ok', { registered: !alreadyKnown }, { replyTo: frame.id }),
+      ),
+    );
+    return OK;
+  }
+
+  private authFailure(conn: SignalingConnection, deviceId: string, reason: string): InboundResult {
+    const pending = this.pendingAuth.get(conn.connId);
+    const failures = (pending?.failures ?? 0) + 1;
+    if (pending) pending.failures = failures;
+    this.deps.log.warn('device.auth_failed', { connId: conn.connId, deviceId, failures, reason });
+    if (this.deps.deviceAuthMode === 'required' || failures >= MAX_AUTH_FAILURES) {
+      return FATAL(WS_CLOSE_POLICY);
+    }
+    // Open mode tolerates devices whose keys are not yet registered (first
+    // pairing) while still closing the socket on repeated failures.
+    return OK;
+  }
+
+  /** Pair/session flows demand an authenticated connection in required mode. */
+  private requireAuthenticated(conn: SignalingConnection): boolean {
+    return this.deps.deviceAuthMode === 'open' || this.authenticated.has(conn.connId);
   }
 
   private onPairCreate(
     conn: SignalingConnection,
     frame: Extract<SignalingMessage, { type: 'pair.create' }>,
   ): InboundResult {
+    if (!this.requireAuthenticated(conn)) {
+      this.sendError(conn, 'MESSAGE_INVALID', 'device authentication required');
+      return FATAL(WS_CLOSE_POLICY);
+    }
     const reg = this.deps.registry.get(conn.connId);
     if (reg?.role !== 'desktop' || reg.deviceId === null) {
       this.sendError(conn, 'MESSAGE_INVALID', 'pair.create requires desktop role');
@@ -215,10 +330,18 @@ export class SignalingRouter {
     conn: SignalingConnection,
     frame: Extract<SignalingMessage, { type: 'pair.join' }>,
   ): InboundResult {
+    if (!this.requireAuthenticated(conn)) {
+      this.sendError(conn, 'MESSAGE_INVALID', 'device authentication required');
+      return FATAL(WS_CLOSE_POLICY);
+    }
     const reg = this.deps.registry.get(conn.connId);
     if (reg?.role !== 'phone' || reg.deviceId === null) {
       this.sendError(conn, 'MESSAGE_INVALID', 'pair.join requires phone role');
       return FATAL(WS_CLOSE_POLICY);
+    }
+    if (this.deps.devices.isRevoked(reg.deviceId)) {
+      this.sendError(conn, 'DEVICE_REVOKED', undefined, frame.id);
+      return OK;
     }
     const pairing = this.deps.pairings.get(frame.payload.pairId);
     if (!pairing || pairing.state === 'EXPIRED' || pairing.state === 'CANCELLED') {
@@ -353,10 +476,28 @@ export class SignalingRouter {
     conn: SignalingConnection,
     frame: Extract<SignalingMessage, { type: 'session.request' }>,
   ): InboundResult {
+    if (!this.requireAuthenticated(conn)) {
+      this.sendError(conn, 'MESSAGE_INVALID', 'device authentication required');
+      return FATAL(WS_CLOSE_POLICY);
+    }
     const reg = this.deps.registry.get(conn.connId);
     if (reg?.role !== 'phone' || reg.deviceId === null) {
       this.sendError(conn, 'MESSAGE_INVALID', 'session.request requires phone role');
       return FATAL(WS_CLOSE_POLICY);
+    }
+    if (
+      this.deps.devices.isRevoked(reg.deviceId) ||
+      this.deps.devices.isRevoked(frame.payload.desktopDeviceId)
+    ) {
+      this.sendError(conn, 'DEVICE_REVOKED', undefined, frame.id);
+      return OK;
+    }
+    if (
+      this.deps.devices.isRevoked(reg.deviceId) ||
+      this.deps.devices.isRevoked(frame.payload.desktopDeviceId)
+    ) {
+      this.sendError(conn, 'DEVICE_REVOKED', undefined, frame.id);
+      return OK;
     }
     const desktopConnId = this.deps.registry.connIdForDevice(frame.payload.desktopDeviceId);
     if (!desktopConnId) {
@@ -496,6 +637,8 @@ export class SignalingRouter {
   /** Transport notifies the router when a socket dies: unwind dependent state. */
   handleConnClosed(connId: string): void {
     this.handles.delete(connId);
+    this.authenticated.delete(connId);
+    this.pendingAuth.delete(connId);
     const reg = this.deps.registry.unregister(connId);
     if (!reg) return;
     // Cancel open pairings presented or joined by this connection.

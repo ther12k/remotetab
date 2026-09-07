@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { MAX_SIGNALING_FRAME_BYTES } from './limits.ts';
 import { ProtocolError } from './protocol-error.ts';
 
+/** Domain separator for the signaling WS device-auth transcript (#018). */
+export const WS_AUTH_DOMAIN = 'remotetab.v1.ws-auth';
+
 /**
  * Shared wire primitives. Every object schema in this package is strict:
  * unknown keys are rejected so undeclared fields can never smuggle behavior.

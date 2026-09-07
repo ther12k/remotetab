@@ -47,6 +47,7 @@
       "name": "@remotetab/signaling",
       "version": "0.1.0",
       "dependencies": {
+        "@remotetab/crypto": "workspace:*",
         "@remotetab/protocol": "workspace:*",
         "hono": "^4.13.7",
       },

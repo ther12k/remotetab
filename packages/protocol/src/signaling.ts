@@ -116,6 +116,27 @@ export const signalIceSchema = z.strictObject({
 export const presencePingSchema = z.strictObject({ ts: z.number().int().finite().positive() });
 export const presencePongSchema = z.strictObject({ ts: z.number().int().finite().positive() });
 
+/**
+ * WS device authentication (#018): after hello, the server sends a fresh
+ * nonce challenge; the client signs a canonical transcript (server-side
+ * domain, protocol version, nonce, deviceId) with its device key and replies
+ * with the proof plus the public key the server should verify against and
+ * register. See SignalingRouter.onHello.
+ */
+export const authChallengeSchema = z.strictObject({
+  nonce: z.string().regex(BASE64URL_PATTERN).max(86),
+});
+
+export const authProofSchema = z.strictObject({
+  signature: z.string().regex(BASE64URL_PATTERN).max(512),
+  /** ECDSA P-256 SPKI public key, base64url — registered on first proof. */
+  publicKeySpki: z.string().regex(BASE64URL_PATTERN).max(256),
+  publicKeyFingerprint: z.string().regex(BASE64URL_PATTERN).max(64),
+  displayName: displayableText(MAX_DISPLAY_NAME_LENGTH).optional(),
+});
+
+export const authOkSchema = z.strictObject({ registered: z.boolean() });
+
 export const signalingErrorSchema = z.strictObject({
   code: z.enum(ERROR_CODES),
   message: displayableText(256).optional(),
@@ -206,6 +227,21 @@ export const signalingMessageSchema = z.discriminatedUnion('type', [
   }),
   z.strictObject({
     ...signalingEnvelopeBase,
+    type: z.literal('auth.challenge'),
+    payload: authChallengeSchema,
+  }),
+  z.strictObject({
+    ...signalingEnvelopeBase,
+    type: z.literal('auth.proof'),
+    payload: authProofSchema,
+  }),
+  z.strictObject({
+    ...signalingEnvelopeBase,
+    type: z.literal('auth.ok'),
+    payload: authOkSchema,
+  }),
+  z.strictObject({
+    ...signalingEnvelopeBase,
     type: z.literal('error'),
     payload: signalingErrorSchema,
   }),
@@ -230,6 +266,9 @@ export type SignalingMessageType =
   | 'signal.ice'
   | 'presence.ping'
   | 'presence.pong'
+  | 'auth.challenge'
+  | 'auth.proof'
+  | 'auth.ok'
   | 'error';
 export type SignalingMessage = z.output<typeof signalingMessageSchema>;
 export type SignalingPayload<T extends SignalingMessageType = SignalingMessageType> = Extract<
@@ -256,6 +295,9 @@ export const SIGNALING_MESSAGE_TYPES = [
   'signal.ice',
   'presence.ping',
   'presence.pong',
+  'auth.challenge',
+  'auth.proof',
+  'auth.ok',
   'error',
 ] as const satisfies readonly SignalingMessageType[];
 
