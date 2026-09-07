@@ -21,7 +21,9 @@ function isValidState(value: unknown): value is SessionState {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
-    typeof v.phase === 'string' && (v.targetTabId === null || typeof v.targetTabId === 'number')
+    typeof v.phase === 'string' &&
+    (v.capture === undefined || typeof v.capture === 'string') &&
+    (v.targetTabId === null || typeof v.targetTabId === 'number')
   );
 }
 
@@ -31,7 +33,9 @@ export class ChromeSessionStore implements SessionStore {
   async load(): Promise<SessionState> {
     const result = await this.area.get(SESSION_STATE_KEY);
     const raw = result[SESSION_STATE_KEY];
-    return isValidState(raw) ? raw : INITIAL_STATE;
+    if (!isValidState(raw)) return INITIAL_STATE;
+    // Older persisted states may predate the capture field.
+    return { ...INITIAL_STATE, ...raw, capture: raw.capture ?? 'idle' } as SessionState;
   }
 
   async save(state: SessionState): Promise<void> {

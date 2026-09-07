@@ -16,13 +16,29 @@ describe('session state transitions', () => {
     expect(INITIAL_STATE.targetTabId).toBeNull();
   });
 
-  it('enable binds the target tab and clears errors', () => {
+  it('enable binds the target tab, clears errors, starts capture', () => {
     const failing: SessionState = { ...INITIAL_STATE, error: { code: 'X', message: 'x' } };
     const next = transition(failing, { type: 'enable', tabId: 42, nowMs: NOW });
     expect(next.phase).toBe('enabled');
+    expect(next.capture).toBe('starting');
     expect(next.targetTabId).toBe(42);
     expect(next.error).toBeNull();
     expect(next.sinceMs).toBe(NOW);
+  });
+
+  it('tracks the capture lifecycle', () => {
+    let state = transition(INITIAL_STATE, { type: 'enable', tabId: 9, nowMs: NOW });
+    state = transition(state, { type: 'capture-active', nowMs: NOW });
+    expect(state.capture).toBe('active');
+    expect(state.phase).toBe('enabled');
+    state = transition(state, {
+      type: 'capture-failed',
+      code: 'CAPTURE_NOT_ACTIVE',
+      message: 'Capture ended.',
+      nowMs: NOW,
+    });
+    expect(state.capture).toBe('error');
+    expect(state.phase).toBe('stopping');
   });
 
   it('walks the documented happy path', () => {
@@ -109,7 +125,13 @@ describe('reconcile after restart', () => {
       'reconnecting',
       'stopping',
     ] as const) {
-      const state: SessionState = { phase, targetTabId: 5, error: null, sinceMs: NOW };
+      const state: SessionState = {
+        phase,
+        capture: 'active',
+        targetTabId: 5,
+        error: null,
+        sinceMs: NOW,
+      };
       const reconciled = reconcileAfterRestart(state, NOW);
       expect(reconciled.phase).toBe('idle');
       expect(reconciled.targetTabId).toBeNull();

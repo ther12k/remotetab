@@ -83,3 +83,19 @@ Use `requestKeepAwake("system")`.
 The MVP control plane should not branch on `chatgpt.com`.
 
 Target-specific behavior requires a new product/policy decision.
+
+## ADR-013 — Capture via popup user gesture + offscreen consumption
+
+**Status:** Accepted (issue #006, verified against current stable Chrome).
+
+`chrome.tabCapture.getMediaStreamId()` requires a local user gesture. The popup obtains the streamId inside the Enable Remote click handler and passes it to the service worker; the offscreen document consumes it with `getUserMedia({ video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId } } })`. This mirrors the official MV3 tab-capture sample. Consequences:
+
+- capture can never start without an explicit local click (ADR-005 holds);
+- the service worker and offscreen document have no privileged media role of their own;
+- a streamId is single-use and short-lived, so it is never persisted.
+
+## ADR-014 — `capture` is a first-class field of session state
+
+**Status:** Accepted (issue #006).
+
+The MediaStream lifecycle (`idle | starting | active | error`) is tracked next to the peer phase instead of being conflated with it, because capture can be active while no peer has connected yet. Capture failure is fail-closed: it tears the whole session down.
