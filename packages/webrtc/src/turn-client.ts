@@ -64,19 +64,28 @@ export type SelectedPair = {
   localType: string;
   remoteType: string;
   transport: 'relay' | 'direct' | 'unknown';
+  rttMs: number | null;
 };
 
 export async function describeSelectedPair(pc: RTCPeerConnection): Promise<SelectedPair | null> {
   try {
     const stats = await pc.getStats();
-    let pair: { localCandidateId?: string; remoteCandidateId?: string } | null = null;
+    let pair: {
+      localCandidateId?: string;
+      remoteCandidateId?: string;
+      currentRoundTripTime?: number;
+    } | null = null;
     const candidates = new Map<string, { candidateType?: string }>();
     stats.forEach((report) => {
       if (
         report.type === 'candidate-pair' &&
         (report as { state?: string }).state === 'succeeded'
       ) {
-        pair = report as { localCandidateId?: string; remoteCandidateId?: string };
+        pair = report as {
+          localCandidateId?: string;
+          remoteCandidateId?: string;
+          currentRoundTripTime?: number;
+        };
       }
       if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
         const r = report as { id?: string; candidateType?: string };
@@ -84,7 +93,11 @@ export async function describeSelectedPair(pc: RTCPeerConnection): Promise<Selec
       }
     });
     if (pair === null) return null;
-    const p = pair as { localCandidateId?: string; remoteCandidateId?: string };
+    const p = pair as {
+      localCandidateId?: string;
+      remoteCandidateId?: string;
+      currentRoundTripTime?: number;
+    };
     const localType =
       (p.localCandidateId !== undefined
         ? candidates.get(p.localCandidateId)?.candidateType
@@ -96,6 +109,10 @@ export async function describeSelectedPair(pc: RTCPeerConnection): Promise<Selec
     return {
       localType,
       remoteType,
+      rttMs:
+        typeof p.currentRoundTripTime === 'number'
+          ? Math.round(p.currentRoundTripTime * 1000)
+          : null,
       transport: localType === 'relay' || remoteType === 'relay' ? 'relay' : 'direct',
     };
   } catch {
