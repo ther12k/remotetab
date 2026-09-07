@@ -1,10 +1,11 @@
 import { DEFAULT_ICE_SERVERS } from '@remotetab/webrtc';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PairScreen } from './components/PairScreen.tsx';
 import { Viewer } from './components/Viewer.tsx';
 import { loadPhoneIdentity } from './lib/phone-identity.ts';
 import { ReceiverSession, type RemoteStatus } from './lib/receiver-session.ts';
 
-type Screen = 'connect' | 'session';
+type Screen = 'connect' | 'session' | 'pair';
 
 const SERVER_KEY = 'remotetab.signalingUrl';
 const CODE_KEY = 'remotetab.laptopCode';
@@ -78,6 +79,19 @@ export function App() {
   // Clean teardown when the app unmounts.
   useEffect(() => () => sessionRef.current?.disconnect(), []);
 
+  if (screen === 'pair') {
+    return (
+      <PairScreen
+        server={server}
+        onBack={() => setScreen('connect')}
+        onPaired={(desktopDeviceId) => {
+          setCode(desktopDeviceId);
+          setScreen('connect');
+        }}
+      />
+    );
+  }
+
   if (screen === 'connect') {
     return (
       <ConnectScreen
@@ -87,6 +101,7 @@ export function App() {
         setServer={setServer}
         status={status}
         onConnect={connect}
+        onPair={() => setScreen('pair')}
       />
     );
   }
@@ -104,8 +119,9 @@ function ConnectScreen(props: {
   setServer: (v: string) => void;
   status: RemoteStatus;
   onConnect: () => void;
+  onPair: () => void;
 }) {
-  const { code, setCode, server, setServer, status, onConnect } = props;
+  const { code, setCode, server, setServer, status, onConnect, onPair } = props;
   const valid = /^[A-Za-z0-9_-]{8,64}$/.test(code.trim());
   const busy =
     status.phase === 'connecting' || status.phase === 'requesting' || status.phase === 'signaling';
@@ -149,6 +165,10 @@ function ConnectScreen(props: {
 
       <button type="button" className="primary" disabled={!valid || busy} onClick={onConnect}>
         {busy ? 'Connecting…' : 'Connect'}
+      </button>
+
+      <button type="button" className="ghost" onClick={onPair}>
+        Pair with a QR code…
       </button>
 
       <details className="advanced">
