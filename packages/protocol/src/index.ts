@@ -22,6 +22,7 @@ export {
   parseControlMessage,
   pointerButtonSchema,
   pointerMoveSchema,
+  type RemoteKey,
   sessionStopReason,
   sessionStopSchema,
   textInsertSchema,

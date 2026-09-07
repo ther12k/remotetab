@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { ControlSender } from '@remotetab/protocol';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Mode } from '../lib/gesture.ts';
+import { PrioritizedInputSender } from '../lib/input-sender.ts';
 import type { ReceiverSession, RemoteStatus } from '../lib/receiver-session.ts';
 import { TouchBridge } from '../lib/touch-bridge.ts';
+import { KeyboardSheet } from './KeyboardSheet.tsx';
 
 /**
  * Viewer screen: remote video + connection status + input modes. Touch and
@@ -19,6 +22,24 @@ export function Viewer(props: {
   const bridgeRef = useRef<TouchBridge | null>(null);
   const [trackInfo, setTrackInfo] = useState<{ w: number; h: number } | null>(null);
   const [mode, setMode] = useState<Mode>('pointer');
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+
+  // One shared sender keeps touch + keyboard frames ordered end-to-end.
+  const sender = useMemo(() => {
+    if (!session) return null;
+    const encodeWheel =
+      (sessionId: string) => (d: { x: number; y: number; deltaX: number; deltaY: number }) => {
+        const cs = new ControlSender(sessionId);
+        return cs.wheel(d.x, d.y, Math.round(d.deltaX), Math.round(d.deltaY));
+      };
+    return new PrioritizedInputSender({
+      send: (raw) => session.sendControl(raw),
+      encodeWheel: (d) => {
+        const sessionId = session.sessionId ?? '';
+        return encodeWheel(sessionId)(d);
+      },
+    });
+  }, [session]);
 
   useEffect(() => {
     if (!session) return;
@@ -40,7 +61,13 @@ export function Viewer(props: {
     const video = videoRef.current;
     const wrap = wrapRef.current;
     if (!session || !video || !wrap) return;
-    const bridge = new TouchBridge({ element: wrap, video, session, mode });
+    const bridge = new TouchBridge({
+      element: wrap,
+      video,
+      session,
+      mode,
+      sender: sender ?? undefined,
+    });
     bridgeRef.current = bridge;
     bridge.setChannelOpen(controlOpen);
     const dispose = bridge.attach();
@@ -48,7 +75,7 @@ export function Viewer(props: {
       dispose();
       bridgeRef.current = null;
     };
-  }, [session, mode, controlOpen]);
+  }, [session, mode, controlOpen, sender]);
 
   const onFullscreen = useCallback(() => {
     const el = wrapRef.current;
@@ -107,6 +134,14 @@ export function Viewer(props: {
             Scroll
           </button>
         </div>
+        <button
+          type="button"
+          className={keyboardOpen ? 'mode selected' : 'mode'}
+          onClick={() => setKeyboardOpen((v) => !v)}
+          aria-label="Keyboard"
+        >
+          ⌨
+        </button>
         <button type="button" onClick={onFullscreen} aria-label="Fullscreen">
           ⛶
         </button>
@@ -123,6 +158,10 @@ export function Viewer(props: {
           </code>
         </details>
       </footer>
+
+      {keyboardOpen && session && sender !== null && (
+        <KeyboardSheet session={session} sender={sender} onClose={() => setKeyboardOpen(false)} />
+      )}
     </main>
   );
 }
