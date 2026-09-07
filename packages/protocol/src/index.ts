@@ -1,3 +1,79 @@
-// @remotetab/protocol — single source of truth for RemoteTab wire messages.
-// Implemented in issue #002.
-export const PROTOCOL_VERSION = 1 as const;
+export {
+  nonceSchema,
+  type PeerAuthMessage,
+  type PeerChallenge,
+  type PeerProof,
+  parsePeerAuthMessage,
+  peerAuthMessageSchema,
+  peerChallengeSchema,
+  peerProofSchema,
+} from './auth.ts';
+export {
+  acceptControlFrame,
+  CONTROL_MESSAGE_TYPES,
+  type ControlMessage,
+  type ControlMessageType,
+  type ControlPayload,
+  ControlSender,
+  controlMessageSchema,
+  decodeControlFrame,
+  encodeControlFrame,
+  keyEventSchema,
+  parseControlMessage,
+  pointerButtonSchema,
+  pointerMoveSchema,
+  sessionStopReason,
+  sessionStopSchema,
+  textInsertSchema,
+  viewportRequestSchema,
+  viewportSyncSchema,
+  wheelSchema,
+} from './control.ts';
+export { ERROR_CODES, type ErrorCode } from './errors.ts';
+export {
+  decodeJsonFrame,
+  finiteNumber,
+  idSchema,
+  type ParseResult,
+  parseWith,
+  SequenceGuard,
+  seqNumber,
+  signalingEnvelopeBase,
+  timestampMs,
+  toProtocolError,
+  unitCoord,
+} from './frame.ts';
+export * from './limits.ts';
+export { CODES, isErrorCode, ProtocolError } from './protocol-error.ts';
+export {
+  decodeSignalingFrame,
+  deviceRole,
+  errorFor,
+  helloOkSchema,
+  helloSchema,
+  pairAcceptedSchema,
+  pairAcceptSchema,
+  pairCreatedSchema,
+  pairCreateSchema,
+  pairJoinSchema,
+  pairRejectSchema,
+  parseSignalingMessage,
+  presencePingSchema,
+  presencePongSchema,
+  SIGNALING_MESSAGE_TYPES,
+  type SignalingMessage,
+  type SignalingMessageType,
+  type SignalingPayload,
+  sessionAcceptedSchema,
+  sessionCloseSchema,
+  sessionRejectedSchema,
+  sessionRequestSchema,
+  signalAnswerSchema,
+  signalIceSchema,
+  signalingErrorFrame,
+  signalingErrorSchema,
+  signalingFrame,
+  signalingMessageSchema,
+  signalOfferSchema,
+} from './signaling.ts';
+export { CONTROL_CHANNEL, HEALTH_CHANNEL, PROTOCOL_DOMAIN, PROTOCOL_VERSION } from './version.ts';
