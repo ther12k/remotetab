@@ -15,6 +15,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@remotetab/protocol": "workspace:*",
+        "@remotetab/webrtc": "workspace:*",
       },
       "devDependencies": {
         "wxt": "^0.21.4",
@@ -57,6 +58,9 @@
     "packages/webrtc": {
       "name": "@remotetab/webrtc",
       "version": "0.1.0",
+      "dependencies": {
+        "@remotetab/protocol": "workspace:*",
+      },
     },
   },
   "packages": {

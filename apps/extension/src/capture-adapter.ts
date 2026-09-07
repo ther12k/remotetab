@@ -12,17 +12,23 @@ export interface TabCaptureAdapter {
   start(streamId: string): Promise<{ width: number; height: number } | null>;
   stop(): Promise<void>;
   state(): CaptureState;
+  /** The live stream while capture is active, else null. */
+  readonly stream: MediaStream | null;
   /** Register a callback fired when the underlying track ends by itself. */
   onEnded(listener: () => void): void;
 }
 
 export class OffscreenTabCaptureAdapter implements TabCaptureAdapter {
-  private stream: MediaStream | null = null;
+  private streamRef: MediaStream | null = null;
   private currentState: CaptureState = 'idle';
   private endedListeners: (() => void)[] = [];
 
   state(): CaptureState {
     return this.currentState;
+  }
+
+  get stream(): MediaStream | null {
+    return this.streamRef;
   }
 
   onEnded(listener: () => void): void {
@@ -50,11 +56,11 @@ export class OffscreenTabCaptureAdapter implements TabCaptureAdapter {
         },
       } as unknown as MediaStreamConstraints;
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      this.stream = stream;
+      this.streamRef = stream;
       const [track] = stream.getVideoTracks();
       if (!track) throw new Error('capture stream has no video track');
       track.addEventListener('ended', () => {
-        this.stream = null;
+        this.streamRef = null;
         this.currentState = 'idle';
         for (const listener of this.endedListeners) listener();
       });
@@ -68,8 +74,8 @@ export class OffscreenTabCaptureAdapter implements TabCaptureAdapter {
   }
 
   async stop(): Promise<void> {
-    const stream = this.stream;
-    this.stream = null;
+    const stream = this.streamRef;
+    this.streamRef = null;
     if (stream) {
       for (const track of stream.getTracks()) {
         track.stop();

@@ -123,9 +123,23 @@
     </section>
 
     <section>
+      <div class="label">This laptop's code</div>
+      <div id="device-code" class="muted" style="font-family: monospace; word-break: break-all;">…</div>
+    </section>
+
+    <section>
       <div class="label">Paired devices</div>
       <div class="muted">Pairing arrives with the next milestone.</div>
     </section>
+
+    <details>
+      <summary class="muted">Advanced</summary>
+      <div class="label" style="margin-top:8px;">Signaling URL</div>
+      <input id="signaling-url" type="text" spellcheck="false"
+        style="width:100%; box-sizing:border-box; padding:6px 8px; border-radius:6px; border:1px solid color-mix(in srgb, canvastext 25%, transparent); font: 12px monospace;" />
+      <button type="button" id="save-settings" style="margin-top:6px;">Save</button>
+      <div id="settings-msg" class="muted" style="margin-top:4px;"></div>
+    </details>
 
     <details id="rationale">
       <summary>What RemoteTab accesses</summary>
