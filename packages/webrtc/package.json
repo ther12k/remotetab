@@ -8,5 +8,8 @@
   },
   "scripts": {
     "build": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@remotetab/protocol": "workspace:*"
   }
 }

@@ -1,21 +1,37 @@
 /**
  * RemoteTab service worker: owns session state, the enable/stop lifecycle,
- * capture coordination, and message routing between popup and the offscreen
- * media host (issues #005–#006; WebRTC/input arrive in #007/#009).
+ * capture coordination, signaling, and relaying between the offscreen WebRTC
+ * sender and the signaling service (issues #005–#007; CDP input is #009).
  *
  * MV3 note: the SW can be killed at any time. On every wake we reconcile the
  * persisted session state — an active-looking state without a live session
  * fails closed to idle.
  */
 
+import {
+  newSessionId,
+  type SignalingMessage,
+  sessionAcceptedSchema,
+  sessionCloseSchema,
+  sessionRequestSchema,
+  signalAnswerSchema,
+  signalIceSchema,
+  signalingFrame,
+} from '@remotetab/protocol';
+import { DEFAULT_ICE_SERVERS, toIceServers } from '@remotetab/webrtc';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
+import { DeviceIdentityStore } from '@/device.ts';
 import {
   isOffscreenEvent,
+  isOffscreenRequest,
   isOffscreenResponse,
   isPopupRequest,
+  isSenderEvent,
   type OffscreenRequest,
   type OffscreenResponse,
+  type SenderEvent,
+  type SenderRequest,
   type StateResponse,
 } from '@/messages.ts';
 import {
@@ -25,13 +41,22 @@ import {
   transition,
 } from '@/session-state.ts';
 import { ChromeSessionStore } from '@/session-store.ts';
+import { SettingsStore } from '@/settings.ts';
+import { SignalingClient, type SignalingState } from '@/signaling-client.ts';
 import { isCapturableUrl } from '@/tabs.ts';
 
 export default defineBackground(() => {
   const store = new ChromeSessionStore(browser.storage.session);
+  const settingsStore = new SettingsStore(browser.storage.local);
+  const deviceStore = new DeviceIdentityStore(browser.storage.local);
+
+  /** The one live WebRTC session being relayed (ephemeral, never persisted). */
+  let activeSessionId: string | null = null;
+  let signaling: SignalingClient | null = null;
+  let signalingState: SignalingState = 'offline';
 
   // -------------------------------------------------------------------------
-  // Offscreen document lifecycle
+  // Offscreen document lifecycle (#006)
   // -------------------------------------------------------------------------
 
   async function ensureOffscreenDocument(): Promise<void> {
@@ -63,7 +88,7 @@ export default defineBackground(() => {
   }
 
   function sendToOffscreen(
-    request: OffscreenRequest,
+    request: OffscreenRequest | SenderRequest,
     timeoutMs = 8000,
   ): Promise<OffscreenResponse> {
     return new Promise((resolve) => {
@@ -95,6 +120,192 @@ export default defineBackground(() => {
           });
         });
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Signaling session flow (#007)
+  // -------------------------------------------------------------------------
+
+  async function startSignaling(): Promise<void> {
+    const [settings, identity] = await Promise.all([
+      settingsStore.load(),
+      deviceStore.loadOrCreate(),
+    ]);
+    const servers =
+      settings.iceUrls.length > 0 ? toIceServers(settings.iceUrls) : DEFAULT_ICE_SERVERS;
+
+    signaling?.close();
+    const client = new SignalingClient({
+      url: settings.signalingUrl,
+      hello: { role: 'desktop', deviceId: identity.deviceId, displayName: identity.displayName },
+      onState: (state) => {
+        signalingState = state;
+        void updateSignalingPhase(state);
+      },
+      onFrame: (frame) => void handleSignalingFrame(frame, identity.deviceId, servers),
+    });
+    signaling = client;
+    client.connect();
+  }
+
+  function stopSignaling(): void {
+    signaling?.close();
+    signaling = null;
+    signalingState = 'offline';
+  }
+
+  /** Map signaling health onto the session phase (fail closed). */
+  async function updateSignalingPhase(state: SignalingState): Promise<void> {
+    const current = await store.load();
+    if (state === 'online') {
+      if (current.phase === 'enabled') {
+        await store.save(transition(current, { type: 'signaling', nowMs: Date.now() }));
+      }
+      return;
+    }
+    if (
+      current.phase === 'peer-connected' ||
+      current.phase === 'authenticating' ||
+      current.phase === 'remote-active'
+    ) {
+      await store.save(transition(current, { type: 'reconnecting', nowMs: Date.now() }));
+    }
+  }
+
+  async function handleSignalingFrame(
+    frame: SignalingMessage,
+    desktopDeviceId: string,
+    servers: RTCIceServer[],
+  ): Promise<void> {
+    const state = await store.load();
+    switch (frame.type) {
+      case 'session.request': {
+        const req = sessionRequestSchema.parse(frame.payload);
+        // M1 vertical slice: auto-accept while capturing, one session at a
+        // time. Pairing + peer auth (#013/#014) gate this before release.
+        if (state.capture !== 'active' || activeSessionId !== null) {
+          signaling?.send(signalingFrame('session.rejected', { code: 'SESSION_CONFLICT' }));
+          return;
+        }
+        const sessionId = newSessionId();
+        const accepted = sessionAcceptedSchema.parse({
+          sessionId,
+          desktopDeviceId,
+          phoneDeviceId: req.deviceId,
+        });
+        activeSessionId = sessionId;
+        await store.save(transition(state, { type: 'peer-connected', nowMs: Date.now() }));
+        signaling?.send(signalingFrame('session.accepted', accepted));
+        await sendToOffscreen(
+          { type: 'sender:startSession', sessionId, iceServers: servers },
+          8000,
+        );
+        return;
+      }
+      case 'signal.answer': {
+        const answer = signalAnswerSchema.parse(frame.payload);
+        if (answer.sessionId !== activeSessionId) return;
+        await sendToOffscreen({
+          type: 'sender:applyAnswer',
+          sessionId: answer.sessionId,
+          answerType: 'answer',
+          sdp: answer.sdp,
+        });
+        return;
+      }
+      case 'signal.ice': {
+        const ice = signalIceSchema.parse(frame.payload);
+        if (ice.sessionId !== activeSessionId || !ice.candidate) return;
+        await sendToOffscreen({
+          type: 'sender:addIceCandidate',
+          sessionId: ice.sessionId,
+          candidate: {
+            candidate: ice.candidate,
+            sdpMid: ice.sdpMid,
+            sdpMLineIndex: ice.sdpMLineIndex,
+            usernameFragment: ice.usernameFragment,
+          },
+        });
+        return;
+      }
+      case 'session.close': {
+        const close = sessionCloseSchema.parse(frame.payload);
+        if (close.sessionId !== activeSessionId) return;
+        await teardownSession();
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  async function handleSenderEvent(event: SenderEvent): Promise<void> {
+    if (event.sessionId !== activeSessionId) return;
+    const state = await store.load();
+    switch (event.type) {
+      case 'sender:offer':
+        signaling?.send(
+          signalingFrame('signal.offer', { sessionId: event.sessionId, sdp: event.sdp }),
+        );
+        return;
+      case 'sender:ice': {
+        const candidate = event.candidate;
+        if (!candidate) return;
+        signaling?.send(
+          signalingFrame('signal.ice', {
+            sessionId: event.sessionId,
+            candidate: candidate.candidate,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex,
+            usernameFragment: candidate.usernameFragment,
+          }),
+        );
+        return;
+      }
+      case 'sender:peerState':
+        if (event.state === 'connected') {
+          await store.save(transition(state, { type: 'peer-connected', nowMs: Date.now() }));
+        } else if (
+          event.state === 'failed' ||
+          event.state === 'no-track' ||
+          event.state === 'offer-failed'
+        ) {
+          await teardownSession();
+        } else if (event.state === 'disconnected' || event.state === 'closed') {
+          if (isRemoteModeActive(state.phase)) {
+            await store.save(transition(state, { type: 'reconnecting', nowMs: Date.now() }));
+          }
+        }
+        return;
+      case 'sender:channelState':
+        if (event.open && state.phase === 'peer-connected') {
+          // M1 vertical slice: control open → remote-active. Peer auth
+          // (#014) will gate this transition before any release.
+          await store.save(transition(state, { type: 'remote-active', nowMs: Date.now() }));
+        } else if (!event.open && state.phase === 'remote-active') {
+          await store.save(transition(state, { type: 'reconnecting', nowMs: Date.now() }));
+        }
+        return;
+      case 'sender:controlFrame':
+        // Input dispatch arrives with #009; #014 gates it behind peer auth.
+        // Frames are already schema-validated in the offscreen document.
+        return;
+      case 'sender:protocolViolation':
+        await teardownSession();
+        return;
+    }
+  }
+
+  /** Tear the WebRTC session down while keeping Remote Mode enabled. */
+  async function teardownSession(): Promise<void> {
+    if (activeSessionId) {
+      await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
+    }
+    activeSessionId = null;
+    const state = await store.load();
+    if (state.phase !== 'enabled' && state.phase !== 'idle') {
+      await store.save(transition(state, { type: 'signaling', nowMs: Date.now() }));
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -149,6 +360,10 @@ export default defineBackground(() => {
 
     const active = transition(enabled, { type: 'capture-active', nowMs: Date.now() });
     await store.save(active);
+
+    // Go online so a phone can find this desktop. Connection problems are
+    // recoverable — the client reconnects with backoff while Remote Mode is on.
+    void startSignaling();
     return { ok: true, state: active };
   }
 
@@ -161,13 +376,19 @@ export default defineBackground(() => {
     const failed = transition(from, { type: 'capture-failed', code, message, nowMs: Date.now() });
     const stopped = transition(failed, { type: 'stopped', nowMs: Date.now() });
     await store.save(stopped);
+    stopSignaling();
     void closeOffscreenDocument();
     return { ok: false, error: { code, message } };
   }
 
-  /** Central stop path for #006: capture + offscreen + state. Extended by #012. */
+  /** Central stop: WebRTC session, signaling, capture, offscreen, state (#012 extends). */
   async function stopRemote(reason: 'user' | 'target-closed'): Promise<StateResponse> {
     const current = await store.load();
+    if (activeSessionId) {
+      await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
+      activeSessionId = null;
+    }
+    stopSignaling();
     await sendToOffscreen({ type: 'offscreen:stopCapture' }, 3000);
     await closeOffscreenDocument();
     const stopped = transition(current, { type: 'stopped', nowMs: Date.now() });
@@ -192,7 +413,13 @@ export default defineBackground(() => {
   // -------------------------------------------------------------------------
 
   browser.runtime.onMessage.addListener(
-    (raw: unknown, _sender, sendResponse: (resp: StateResponse) => void) => {
+    (
+      raw: unknown,
+      _sender,
+      sendResponse: (
+        resp: StateResponse | { ok: true; settings: unknown; deviceId: string },
+      ) => void,
+    ) => {
       if (isPopupRequest(raw)) {
         switch (raw.type) {
           case 'getState':
@@ -204,9 +431,40 @@ export default defineBackground(() => {
           case 'stopRemote':
             void stopRemote('user').then(sendResponse);
             return true;
+          case 'getSettings':
+            void Promise.all([settingsStore.load(), deviceStore.loadOrCreate()]).then(
+              ([settings, identity]) =>
+                sendResponse({ ok: true, settings, deviceId: identity.deviceId }),
+            );
+            return true;
+          case 'saveSettings':
+            void settingsStore
+              .save({ signalingUrl: raw.signalingUrl, iceUrls: raw.iceUrls })
+              .then(() => settingsStore.load())
+              .then((settings) =>
+                deviceStore
+                  .loadOrCreate()
+                  .then((identity) =>
+                    sendResponse({ ok: true, settings, deviceId: identity.deviceId }),
+                  ),
+              )
+              .catch((err: unknown) =>
+                sendResponse({
+                  ok: false,
+                  error: {
+                    code: 'MESSAGE_INVALID',
+                    message:
+                      err instanceof Error && err.message.startsWith('invalid')
+                        ? err.message
+                        : 'Settings could not be saved.',
+                  },
+                }),
+              );
+            return true;
         }
         return false;
       }
+      if (isOffscreenRequest(raw)) return false; // for the offscreen document
       if (isOffscreenEvent(raw)) {
         if (raw.type === 'offscreen:captureEnded') {
           void store.load().then(async (state) => {
@@ -220,13 +478,13 @@ export default defineBackground(() => {
         }
         return false;
       }
+      if (isSenderEvent(raw)) {
+        void handleSenderEvent(raw);
+        return false;
+      }
       return false;
     },
   );
-
-  // -------------------------------------------------------------------------
-  // Target tab lifecycle
-  // -------------------------------------------------------------------------
 
   browser.tabs.onRemoved.addListener((closedTabId) => {
     void store.load().then(async (state) => {
@@ -235,13 +493,7 @@ export default defineBackground(() => {
     });
   });
 
-  // Navigation keeps the same capture stream; re-arming on navigation would
-  // risk duplicate tracks, so there is deliberately no onUpdated handler.
-
-  // -------------------------------------------------------------------------
-  // SW wake-up: reconcile stale session state (fail closed)
-  // -------------------------------------------------------------------------
-
+  // SW wake-up: reconcile stale session state (fail closed).
   void store.load().then(async (state: SessionState) => {
     const reconciled = reconcileAfterRestart(state, Date.now());
     if (reconciled.phase !== state.phase) {
@@ -250,4 +502,7 @@ export default defineBackground(() => {
       await store.save(reconciled);
     }
   });
+
+  // Keep the signaling state symbol referenced for diagnostics logging.
+  void signalingState;
 });

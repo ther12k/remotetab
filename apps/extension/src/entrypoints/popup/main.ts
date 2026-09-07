@@ -5,7 +5,12 @@
  */
 
 import { browser } from 'wxt/browser';
-import { type PopupRequest, SESSION_STATE_KEY, type StateResponse } from '@/messages.ts';
+import {
+  type PopupRequest,
+  SESSION_STATE_KEY,
+  type SettingsResponse,
+  type StateResponse,
+} from '@/messages.ts';
 import type { SessionPhase, SessionState } from '@/session-state.ts';
 import { toTabDisplay } from '@/tabs.ts';
 
@@ -48,6 +53,32 @@ function render(state: SessionState): void {
     captureEl.hidden = !active;
     captureEl.textContent = state.phase === 'idle' ? '' : `Capture: ${state.capture}`;
   }
+}
+
+async function refreshSettings(): Promise<void> {
+  const res = (await browser.runtime.sendMessage({ type: 'getSettings' })) as SettingsResponse;
+  const codeEl = document.getElementById('device-code');
+  const urlEl = document.getElementById('signaling-url') as HTMLInputElement | null;
+  if (res.ok) {
+    if (codeEl) codeEl.textContent = res.deviceId;
+    if (urlEl && document.activeElement !== urlEl) urlEl.value = res.settings.signalingUrl;
+  } else if (codeEl) {
+    codeEl.textContent = 'unavailable';
+  }
+}
+
+async function onSaveSettings(): Promise<void> {
+  const urlEl = document.getElementById('signaling-url') as HTMLInputElement | null;
+  const msgEl = document.getElementById('settings-msg');
+  if (!urlEl || !msgEl) return;
+  const res = (await browser.runtime.sendMessage({
+    type: 'saveSettings',
+    signalingUrl: urlEl.value.trim(),
+    iceUrls: ['stun:stun.l.google.com:19302'],
+  })) as SettingsResponse;
+  msgEl.textContent = res.ok
+    ? 'Saved. Applies on next Enable.'
+    : (res.error.message ?? 'Save failed.');
 }
 
 async function refreshTab(): Promise<void> {
@@ -109,6 +140,10 @@ function main(): void {
     'click',
     () => void onStop(),
   );
+  (document.getElementById('save-settings') as HTMLButtonElement | null)?.addEventListener(
+    'click',
+    () => void onSaveSettings(),
+  );
 
   // Live state updates from the service worker.
   browser.storage.onChanged.addListener((changes, area) => {
@@ -119,6 +154,7 @@ function main(): void {
 
   void refreshTab();
   void refreshState();
+  void refreshSettings();
 }
 
 void main();
