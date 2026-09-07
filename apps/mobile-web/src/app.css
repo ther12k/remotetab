@@ -175,3 +175,14 @@ button.ghost {
   font-size: 11px;
   line-height: 1.5;
 }
+
+.modes {
+  display: flex;
+  gap: 6px;
+}
+
+.mode.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
