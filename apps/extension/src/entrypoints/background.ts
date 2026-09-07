@@ -36,6 +36,8 @@ import {
   type SenderRequest,
   type StateResponse,
 } from '@/messages.ts';
+import { ChromePowerAdapter } from '@/power-adapter.ts';
+import type { SessionError } from '@/session-state.ts';
 import {
   isRemoteModeActive,
   reconcileAfterRestart,
@@ -46,6 +48,7 @@ import { ChromeSessionStore } from '@/session-store.ts';
 import { SettingsStore } from '@/settings.ts';
 import { SignalingClient, type SignalingState } from '@/signaling-client.ts';
 import { isCapturableUrl } from '@/tabs.ts';
+import { TeardownOrchestrator, type TeardownStep } from '@/teardown.ts';
 
 export default defineBackground(() => {
   const store = new ChromeSessionStore(browser.storage.session);
@@ -56,6 +59,9 @@ export default defineBackground(() => {
   let activeSessionId: string | null = null;
   let signaling: SignalingClient | null = null;
   let signalingState: SignalingState = 'offline';
+  const power = new ChromePowerAdapter();
+  /** One teardown pass per Remote Mode lifecycle; rebuilt at enable. */
+  let teardown: TeardownOrchestrator | null = null;
 
   // Narrow input authority: the ONLY path from peer frames to CDP.
   const inputService = new InputService(new CdpInputAdapter(), {
@@ -359,6 +365,7 @@ export default defineBackground(() => {
       await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
     }
     await inputService.stop();
+    // (keep-awake stays: Remote Mode itself is still on)
     activeSessionId = null;
     const state = await store.load();
     if (state.phase !== 'enabled' && state.phase !== 'idle') {
@@ -400,6 +407,8 @@ export default defineBackground(() => {
 
     const enabled = transition(current, { type: 'enable', tabId, nowMs: Date.now() });
     await store.save(enabled);
+    teardown = null; // fresh teardown pass for this Remote Mode lifecycle
+    teardown = null; // fresh teardown pass for this Remote Mode lifecycle
 
     try {
       await ensureOffscreenDocument();
@@ -418,6 +427,10 @@ export default defineBackground(() => {
 
     const active = transition(enabled, { type: 'capture-active', nowMs: Date.now() });
     await store.save(active);
+    // Keep the system awake only while Remote Mode is active (ADR-011).
+    power.requestSystem();
+    // Keep the system awake only while Remote Mode is active (ADR-011).
+    power.requestSystem();
 
     // Go online so a phone can find this desktop. Connection problems are
     // recoverable — the client reconnects with backoff while Remote Mode is on.
@@ -425,46 +438,70 @@ export default defineBackground(() => {
     return { ok: true, state: active };
   }
 
-  /** Fail closed: capture errors tear the whole session down. */
+  /** Build ONE ordered, fail-safe teardown pass (issue #012). */
+  function buildTeardown(): TeardownOrchestrator {
+    const steps: TeardownStep[] = [
+      { name: 'input', run: () => inputService.stop() },
+      {
+        name: 'peer',
+        run: async () => {
+          if (activeSessionId !== null) {
+            await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
+          }
+        },
+      },
+      { name: 'signaling', run: async () => stopSignaling() },
+      {
+        name: 'capture',
+        run: async () => {
+          await sendToOffscreen({ type: 'offscreen:stopCapture' }, 3000);
+        },
+      },
+      { name: 'power', run: async () => power.release() },
+      { name: 'offscreen', run: () => closeOffscreenDocument() },
+      {
+        name: 'state',
+        run: async () => {
+          activeSessionId = null;
+          const current = await store.load();
+          const stopped = transition(current, { type: 'stopped', nowMs: Date.now() });
+          await store.save(stopped);
+        },
+      },
+    ];
+    return new TeardownOrchestrator(steps);
+  }
+
+  /** Central stop: input, peer, signaling, capture, power, offscreen, state. */
+  async function stopRemoteSession(
+    reason: 'user' | 'target-closed',
+    error?: SessionError,
+  ): Promise<StateResponse> {
+    void reason;
+    const orchestrator = teardown ?? buildTeardown();
+    teardown = orchestrator;
+    const report = await orchestrator.run();
+    if (report.failed.length > 0) {
+      console.warn(
+        'remotetab: teardown steps failed',
+        report.failed.map((f) => f.name),
+      );
+    }
+    const state = await store.load();
+    if (error) {
+      return { ok: true, state: { ...state, error } };
+    }
+    return { ok: true, state };
+  }
+
+  /** Fail closed: capture errors tear the whole Remote Mode down. */
   async function failCapture(
     from: SessionState,
     code: string,
     message: string,
   ): Promise<StateResponse> {
-    const failed = transition(from, { type: 'capture-failed', code, message, nowMs: Date.now() });
-    const stopped = transition(failed, { type: 'stopped', nowMs: Date.now() });
-    await store.save(stopped);
-    stopSignaling();
-    void closeOffscreenDocument();
-    return { ok: false, error: { code, message } };
-  }
-
-  /** Central stop: WebRTC session, signaling, capture, offscreen, state (#012 extends). */
-  async function stopRemote(reason: 'user' | 'target-closed'): Promise<StateResponse> {
-    const current = await store.load();
-    if (activeSessionId) {
-      await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
-      activeSessionId = null;
-    }
-    await inputService.stop();
-    stopSignaling();
-    await sendToOffscreen({ type: 'offscreen:stopCapture' }, 3000);
-    await closeOffscreenDocument();
-    const stopped = transition(current, { type: 'stopped', nowMs: Date.now() });
-    await store.save(stopped);
-    if (reason === 'target-closed') {
-      return {
-        ok: true,
-        state: {
-          ...stopped,
-          error: {
-            code: 'TARGET_TAB_CLOSED',
-            message: 'Remote tab was closed. Remote Mode stopped.',
-          },
-        },
-      };
-    }
-    return { ok: true, state: stopped };
+    transition(from, { type: 'capture-failed', code, message, nowMs: Date.now() });
+    return stopRemoteSession('user', { code, message });
   }
 
   // -------------------------------------------------------------------------
@@ -488,7 +525,7 @@ export default defineBackground(() => {
             void enableRemote(raw.tabId, raw.streamId).then(sendResponse);
             return true;
           case 'stopRemote':
-            void stopRemote('user').then(sendResponse);
+            void stopRemoteSession('user').then(sendResponse);
             return true;
           case 'getSettings':
             void Promise.all([settingsStore.load(), deviceStore.loadOrCreate()]).then(
@@ -548,7 +585,10 @@ export default defineBackground(() => {
   browser.tabs.onRemoved.addListener((closedTabId) => {
     void store.load().then(async (state) => {
       if (state.targetTabId !== closedTabId) return;
-      await stopRemote('target-closed');
+      await stopRemoteSession('target-closed', {
+        code: 'TARGET_TAB_CLOSED',
+        message: 'Remote tab was closed. Remote Mode stopped.',
+      });
     });
   });
 
@@ -557,6 +597,12 @@ export default defineBackground(() => {
     const reconciled = reconcileAfterRestart(state, Date.now());
     if (reconciled.phase !== state.phase) {
       // The capture host died with the old SW context; clear leftovers.
+      // Keep-awake must not outlive Remote Mode either (release defensively).
+      try {
+        power.release();
+      } catch {
+        // No live power context — nothing to release.
+      }
       void closeOffscreenDocument();
       await store.save(reconciled);
     }
