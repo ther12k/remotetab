@@ -6,6 +6,8 @@
  */
 
 import {
+  authChallengeSchema,
+  authProofSchema,
   decodeSignalingFrame,
   helloSchema,
   presencePingSchema,
@@ -16,9 +18,20 @@ import { BackoffPolicy } from './backoff.ts';
 
 export type SignalingState = 'offline' | 'connecting' | 'online';
 
+export type SignalingAuth = {
+  deviceId: string;
+  publicKeySpki: string;
+  publicKeyFingerprint: string;
+  displayName?: string;
+  /** Sign the server's nonce challenge with the device key → base64url. */
+  sign(nonce: string): Promise<string>;
+};
+
 export type SignalingClientOptions = {
   url: string;
   hello: { role: 'desktop' | 'phone'; deviceId: string; displayName?: string };
+  /** Present to answer auth.challenge (issue #018). */
+  auth?: SignalingAuth;
   /** Heartbeat interval (ms) — must be smaller than the server's stale window. */
   pingIntervalMs?: number;
   /** Close the socket when no inbound frame arrives for this long (ms). */
@@ -95,6 +108,13 @@ export class SignalingClient {
         socket.close(1002, 'protocol');
         return;
       }
+      if (frame.value.type === 'auth.challenge') {
+        void this.answerChallenge(frame.value.payload.nonce);
+        return;
+      }
+      if (frame.value.type === 'auth.ok') {
+        return;
+      }
       this.opts.onFrame(frame.value);
     };
     socket.onclose = () => {
@@ -151,6 +171,24 @@ export class SignalingClient {
       socket.onmessage = null;
       socket.onclose = null;
       socket.onerror = null;
+    }
+  }
+
+  private async answerChallenge(nonce: string): Promise<void> {
+    const auth = this.opts.auth;
+    if (!auth || this.socket === null) return;
+    try {
+      authChallengeSchema.parse({ nonce });
+      const signature = await auth.sign(nonce);
+      const proof = authProofSchema.parse({
+        signature,
+        publicKeySpki: auth.publicKeySpki,
+        publicKeyFingerprint: auth.publicKeyFingerprint,
+        displayName: auth.displayName ?? undefined,
+      });
+      this.socket.send(JSON.stringify(signalingFrame('auth.proof', proof)));
+    } catch {
+      // A malformed proof cannot help us; required-mode servers will close.
     }
   }
 

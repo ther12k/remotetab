@@ -12,11 +12,14 @@ import type { HandshakeDeps } from '@remotetab/crypto';
 import {
   base64urlToBytes,
   bytesToBase64url,
+  encodeTranscript,
   importPrivateKeyPkcs8,
   importPublicKeySpki,
   PeerAuthHandshake,
 } from '@remotetab/crypto';
 import {
+  authChallengeSchema,
+  authProofSchema,
   ControlSender,
   decodeControlFrame,
   decodeSignalingFrame,
@@ -256,6 +259,13 @@ export class ReceiverSession {
           });
         return;
       }
+      case 'auth.challenge': {
+        void this.answerAuthChallenge(frame.value.payload.nonce);
+        return;
+      }
+      case 'auth.ok': {
+        return;
+      }
       case 'session.close': {
         if (frame.value.payload.sessionId !== this.sessionIdValue) return;
         const reason = frame.value.payload.reason;
@@ -341,6 +351,33 @@ export class ReceiverSession {
     const sender = this.controlSender;
     if (sender === null || this.sessionIdValue === null) return false;
     return this.peer?.sendControl(build(sender)) ?? false;
+  }
+
+  /** Answer the signaling WS device-auth challenge (#018). */
+  private async answerAuthChallenge(nonce: string): Promise<void> {
+    try {
+      authChallengeSchema.parse({ nonce });
+      const keys = await loadPhoneKeys();
+      const priv = await importPrivateKeyPkcs8(base64urlToBytes(keys.privateKeyPkcs8));
+      const signature = bytesToBase64url(
+        new Uint8Array(
+          await crypto.subtle.sign(
+            { name: 'ECDSA', hash: 'SHA-256' },
+            priv,
+            encodeTranscript(['remotetab.v1.ws-auth', '1', nonce, keys.deviceId]),
+          ),
+        ),
+      );
+      const proof = authProofSchema.parse({
+        signature,
+        publicKeySpki: keys.publicKeySpki,
+        publicKeyFingerprint: keys.fingerprint,
+        displayName: keys.displayName,
+      });
+      this.send(signalingFrame('auth.proof', proof));
+    } catch {
+      // No usable device key yet — required-mode servers will close the socket.
+    }
   }
 
   /** Parse one laptop frame: peer-auth vs viewport sync. */

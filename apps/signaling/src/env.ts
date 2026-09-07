@@ -13,6 +13,12 @@ export type Env = {
   turnUrls: string[];
   /** Credential lifetime in seconds. */
   turnTtlSeconds: number;
+  /** 'required' closes sockets that fail device auth; 'open' only warns. */
+  deviceAuthMode: 'open' | 'required';
+  /** sqlite path for the durable device registry; empty = in-memory. */
+  databaseUrl: string;
+  /** Bearer token for the admin revoke endpoint; empty disables it. */
+  adminToken: string;
 };
 
 function int(v: string | undefined, fallback: number): number {
@@ -38,5 +44,8 @@ export function parseEnv(env: Record<string, string | undefined> = process.env):
       .map((s) => s.trim())
       .filter((s) => s.startsWith('turn:') || s.startsWith('turns:')),
     turnTtlSeconds: int(env.TURN_TTL_SECONDS, 600),
+    deviceAuthMode: env.DEVICE_AUTH === 'required' ? 'required' : 'open',
+    databaseUrl: env.DATABASE_URL ?? '',
+    adminToken: env.ADMIN_TOKEN ?? '',
   };
 }

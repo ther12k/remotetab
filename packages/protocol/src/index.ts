@@ -43,11 +43,15 @@ export {
   timestampMs,
   toProtocolError,
   unitCoord,
+  WS_AUTH_DOMAIN,
 } from './frame.ts';
 export { isValidId, newDeviceId, newId, newPairId, newRequestId, newSessionId } from './ids.ts';
 export * from './limits.ts';
 export { CODES, isErrorCode, ProtocolError } from './protocol-error.ts';
 export {
+  authChallengeSchema,
+  authOkSchema,
+  authProofSchema,
   decodeSignalingFrame,
   deviceRole,
   errorFor,

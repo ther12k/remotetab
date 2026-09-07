@@ -11,6 +11,7 @@
 import {
   base64urlToBytes,
   bytesToBase64url,
+  encodeTranscript,
   importPublicKeySpki,
   PeerAuthHandshake,
 } from '@remotetab/crypto';
@@ -231,10 +232,28 @@ export default defineBackground(() => {
     );
     void getPairing(identity);
 
+    const priv = await deviceStore.importPrivateKey(identity);
+    const WS_SIGN = { name: 'ECDSA', hash: 'SHA-256' } as const;
     signaling?.close();
     const client = new SignalingClient({
       url: settings.signalingUrl,
       hello: { role: 'desktop', deviceId: identity.deviceId, displayName: identity.displayName },
+      auth: {
+        deviceId: identity.deviceId,
+        publicKeySpki: identity.publicKeySpki,
+        publicKeyFingerprint: identity.fingerprint,
+        displayName: identity.displayName,
+        sign: async (nonce) =>
+          bytesToBase64url(
+            new Uint8Array(
+              await crypto.subtle.sign(
+                WS_SIGN,
+                priv,
+                encodeTranscript(['remotetab.v1.ws-auth', '1', nonce, identity.deviceId]),
+              ),
+            ),
+          ),
+      },
       onState: (state) => {
         signalingState = state;
         void updateSignalingPhase(state);

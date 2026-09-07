@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { MAX_SIGNALING_FRAME_BYTES, newSessionId } from '@remotetab/protocol';
+import { MemoryDeviceRegistry } from '../src/device-registry.ts';
 import { noopLogger } from '../src/logger.ts';
 import { ConnectionRegistry, MemoryPairingRepo, MemorySessionRepo } from '../src/registry.ts';
 import { SignalingRouter } from '../src/router.ts';
@@ -9,9 +10,11 @@ function makeRouter() {
     registry: new ConnectionRegistry(),
     pairings: new MemoryPairingRepo(),
     sessions: new MemorySessionRepo(),
+    devices: new MemoryDeviceRegistry(),
     log: noopLogger,
     nowMs: () => 1_000,
     pairingTtlSeconds: 300,
+    deviceAuthMode: 'open',
   });
 }
 
@@ -30,18 +33,18 @@ function fakeConn(connId: string) {
 }
 
 describe('router-level guards', () => {
-  test('oversized frames return MESSAGE_TOO_LARGE before JSON parsing', () => {
+  test('oversized frames return MESSAGE_TOO_LARGE before JSON parsing', async () => {
     const router = makeRouter();
     const conn = fakeConn('conn_oversize00000000001');
     router.bindHandle(conn);
     const raw = `{"pad":"${'a'.repeat(MAX_SIGNALING_FRAME_BYTES + 1)}"}`;
-    const result = router.handleFrame(conn, raw);
+    const result = await router.handleFrame(conn, raw);
     expect(result.fatal).toBe(true);
     const frame = JSON.parse(conn.sent[0] ?? '{}') as { payload: { code: string } };
     expect(frame.payload.code).toBe('MESSAGE_TOO_LARGE');
   });
 
-  test('device identity may not be re-bound on the same socket', () => {
+  test('device identity may not be re-bound on the same socket', async () => {
     const router = makeRouter();
     const conn = fakeConn('conn_rebind000000000001');
     router.bindHandle(conn);
@@ -53,7 +56,7 @@ describe('router-level guards', () => {
         payload: { role: 'phone', deviceId: 'dev_a00000000000000000001' },
       }),
     );
-    const second = router.handleFrame(
+    const second = await router.handleFrame(
       conn,
       JSON.stringify({
         v: 1,
@@ -64,7 +67,7 @@ describe('router-level guards', () => {
     expect(second.fatal).toBe(true);
   });
 
-  test('an expired pairing join yields PAIR_EXPIRED without closing', () => {
+  test('an expired pairing join yields PAIR_EXPIRED without closing', async () => {
     const registry = new ConnectionRegistry();
     const pairings = new MemoryPairingRepo();
     const now = 10_000;
@@ -72,9 +75,11 @@ describe('router-level guards', () => {
       registry,
       pairings,
       sessions: new MemorySessionRepo(),
+      devices: new MemoryDeviceRegistry(),
       log: noopLogger,
       nowMs: () => now,
       pairingTtlSeconds: 300,
+      deviceAuthMode: 'open',
     });
     registry.register('conn_desktop00000000001', now);
     registry.bind('conn_desktop00000000001', 'desktop', 'dev_desktop0000000000000000001');
@@ -100,7 +105,7 @@ describe('router-level guards', () => {
         payload: { role: 'phone', deviceId: 'dev_phone000000000000000000001' },
       }),
     );
-    const result = router.handleFrame(
+    const result = await router.handleFrame(
       conn,
       JSON.stringify({
         v: 1,

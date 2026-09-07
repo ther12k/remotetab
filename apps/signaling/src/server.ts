@@ -6,6 +6,7 @@
 
 import { MAX_SIGNALING_FRAME_BYTES, newRequestId } from '@remotetab/protocol';
 import { Hono } from 'hono';
+import { createDeviceRegistry } from './device-registry.ts';
 import type { Env } from './env.ts';
 import type { Logger } from './logger.ts';
 import { FrameRateLimiter } from './rate-limit.ts';
@@ -43,13 +44,16 @@ export function startServer(
   const registry = new ConnectionRegistry();
   const pairings = new MemoryPairingRepo();
   const sessions = new MemorySessionRepo();
+  const { registry: devices, durable } = createDeviceRegistry(ctx.env.databaseUrl);
   const router = new SignalingRouter({
     registry,
     pairings,
     sessions,
+    devices,
     log: ctx.log,
     nowMs: options.nowMs ?? (() => Date.now()),
     pairingTtlSeconds: options.pairingTtlSeconds ?? ctx.env.pairingTtlSeconds,
+    deviceAuthMode: ctx.env.deviceAuthMode,
   });
 
   const sockets = new Map<string, SocketEntry>();
@@ -58,7 +62,14 @@ export function startServer(
 
   app.get('/health/live', (c) => c.json({ status: 'live' }));
 
-  app.get('/health/ready', (c) => c.json({ status: 'ready', connections: registry.size }));
+  app.get('/health/ready', (c) =>
+    c.json({
+      status: 'ready',
+      connections: registry.size,
+      deviceRegistry: durable ? 'sqlite' : 'memory',
+      deviceAuthMode: ctx.env.deviceAuthMode,
+    }),
+  );
 
   // Short-lived TURN credentials (issue #017). Disabled unless TURN_SECRET is
   // configured. The shared secret never leaves this process.
@@ -113,7 +124,7 @@ export function startServer(
       router.bindHandle({ connId, send: handle.send, close: handle.close });
       ctx.log.debug('ws.open', { connId });
     },
-    message(ws, message) {
+    async message(ws, message) {
       const connId = ws.data.connId;
       const entry = connId ? sockets.get(connId) : undefined;
       if (!connId || !entry) return;
@@ -123,7 +134,7 @@ export function startServer(
         ctx.log.warn('ws.rate_limited', { connId });
         return;
       }
-      const result = router.handleFrame(
+      const result = await router.handleFrame(
         { connId, send: entry.send, close: entry.close },
         String(message),
       );
