@@ -74,6 +74,9 @@ export class ReceiverSession {
   >();
   private handshake: PeerAuthHandshake | null = null;
   private controlSender: ControlSender | null = null;
+  private reconnectingSinceMs: number | null = null;
+  /** Bounded reconnect window (RECONNECT_TTL_SECONDS, issue #016). */
+  private readonly reconnectTtlMs: number;
 
   constructor(
     private readonly opts: {
@@ -81,8 +84,12 @@ export class ReceiverSession {
       desktopDeviceId: string;
       identity: { deviceId: string; displayName: string };
       iceServers: { urls: string | string[] }[];
+      reconnectTtlMs?: number;
+      nowMs?: () => number;
     },
-  ) {}
+  ) {
+    this.reconnectTtlMs = opts.reconnectTtlMs ?? 60_000;
+  }
 
   on<K extends keyof ReceiverEvents>(
     event: K,
@@ -147,9 +154,25 @@ export class ReceiverSession {
     socket.onclose = () => {
       this.stopPings();
       if (this.phase !== 'ended' && this.phase !== 'idle') {
-        this.setStatus('reconnecting', 'Connection lost. Retrying…');
+        this.reconnectingSinceMs ??= (this.opts.nowMs ?? Date.now)();
+        if (
+          isReconnectExpired(
+            this.reconnectingSinceMs,
+            (this.opts.nowMs ?? Date.now)(),
+            this.reconnectTtlMs,
+          )
+        ) {
+          this.setStatus(
+            'ended',
+            'Could not reconnect within the time window. Connect again.',
+            'error',
+          );
+          this.cleanup();
+          return;
+        }
+        this.setStatus('reconnecting', 'Reconnecting securely…');
       }
-      // Fresh peer connection on any reconnect (#016 finalizes the policy).
+      // Fresh peer connection + fresh session on every reconnect (#016).
       this.closePeer();
       this.socket = null;
       if (this.phase !== 'ended' && this.phase !== 'idle') {
@@ -181,6 +204,8 @@ export class ReceiverSession {
         return;
       }
       case 'session.accepted': {
+        // New epoch: fresh session id + sender sequence (#016).
+        this.reconnectingSinceMs = null;
         this.sessionIdValue = frame.value.payload.sessionId;
         // One persistent phone→laptop sequence space per session (#014).
         this.controlSender = new ControlSender(this.sessionIdValue);
@@ -428,6 +453,7 @@ export class ReceiverSession {
     this.stopPings();
     this.handshake = null;
     this.controlSender = null;
+    this.reconnectingSinceMs = null;
     this.closePeer();
     this.sessionIdValue = null;
     const socket = this.socket;
@@ -442,6 +468,15 @@ export class ReceiverSession {
       }
     }
   }
+}
+
+/** Reconnect must give up after the bounded TTL window. */
+export function isReconnectExpired(
+  reconnectingSinceMs: number,
+  nowMs: number,
+  ttlMs: number,
+): boolean {
+  return nowMs - reconnectingSinceMs > ttlMs;
 }
 
 export { signalAnswerSchema };

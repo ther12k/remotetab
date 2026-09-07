@@ -91,3 +91,14 @@ describe('denormalize', () => {
     expect(denormalize({ x: 0, y: 1 }, { width: 1440, height: 900 })).toEqual({ x: 0, y: 900 });
   });
 });
+
+import { isReconnectExpired } from './receiver-session.ts';
+
+describe('reconnect window (#016)', () => {
+  it('is not expired inside the TTL window', () => {
+    expect(isReconnectExpired(1_000, 31_000, 60_000)).toBe(false);
+  });
+  it('expires after the TTL window', () => {
+    expect(isReconnectExpired(1_000, 61_001, 60_000)).toBe(true);
+  });
+});

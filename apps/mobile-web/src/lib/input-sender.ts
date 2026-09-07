@@ -137,6 +137,18 @@ export class PrioritizedInputSender {
     this.flushMove();
   }
 
+  /**
+   * Drop EVERYTHING queued (moves, wheel, urgent). Called when the session
+   * changes or the channel drops so stale input from a previous session is
+   * never replayed into a new one (#016 non-goal: no queued old input).
+   */
+  reset(): void {
+    this.dispose();
+    this.latestMove = null;
+    this.pendingWheel = null;
+    this.urgentQueue = [];
+  }
+
   /** Clear timers on teardown; queued urgent frames remain for inspection. */
   dispose(): void {
     const timers = this.opts.timers ?? defaultTimers;
