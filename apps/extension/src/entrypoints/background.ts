@@ -21,7 +21,9 @@ import {
 import { DEFAULT_ICE_SERVERS, toIceServers } from '@remotetab/webrtc';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
+import { CdpInputAdapter } from '@/cdp-input.ts';
 import { DeviceIdentityStore } from '@/device.ts';
+import { type ControlSender, InputService } from '@/input-service.ts';
 import {
   isOffscreenEvent,
   isOffscreenRequest,
@@ -54,6 +56,25 @@ export default defineBackground(() => {
   let activeSessionId: string | null = null;
   let signaling: SignalingClient | null = null;
   let signalingState: SignalingState = 'offline';
+
+  // Narrow input authority: the ONLY path from peer frames to CDP.
+  const inputService = new InputService(new CdpInputAdapter(), {
+    send(raw: string): boolean {
+      if (activeSessionId === null) return false;
+      void sendToOffscreen({ type: 'sender:sendControl', sessionId: activeSessionId, raw });
+      return true;
+    },
+  } satisfies ControlSender);
+
+  // A debugger detach (DevTools opened on the tab, crash, etc.) must never
+  // leave input armed (fail closed).
+  browser.debugger.onDetach.addListener((source) => {
+    void (async () => {
+      if (activeSessionId !== null) await inputService.stop();
+      void source;
+      await teardownSession();
+    })();
+  });
 
   // -------------------------------------------------------------------------
   // Offscreen document lifecycle (#006)
@@ -282,14 +303,50 @@ export default defineBackground(() => {
           // M1 vertical slice: control open → remote-active. Peer auth
           // (#014) will gate this transition before any release.
           await store.save(transition(state, { type: 'remote-active', nowMs: Date.now() }));
+          try {
+            if (state.targetTabId !== null) {
+              await inputService.start(event.sessionId, state.targetTabId);
+            }
+          } catch (err) {
+            // Fail closed: input that cannot attach ends Remote Mode with a
+            // readable message instead of staying half-armed.
+            const message =
+              err instanceof Error ? err.message : 'Remote input could not attach to this tab.';
+            const failed = transition(state, {
+              type: 'fail',
+              code: 'INPUT_NOT_ATTACHED',
+              message,
+              nowMs: Date.now(),
+            });
+            const stopped = transition(failed, { type: 'stopped', nowMs: Date.now() });
+            await store.save(stopped);
+            stopSignaling();
+            void closeOffscreenDocument();
+          }
         } else if (!event.open && state.phase === 'remote-active') {
           await store.save(transition(state, { type: 'reconnecting', nowMs: Date.now() }));
         }
         return;
-      case 'sender:controlFrame':
-        // Input dispatch arrives with #009; #014 gates it behind peer auth.
-        // Frames are already schema-validated in the offscreen document.
+      case 'sender:controlFrame': {
+        // Single authority path: validate + gate + dispatch through the
+        // narrow adapter. Frames were schema-validated in the offscreen doc
+        // and are re-checked here.
+        const current = await store.load();
+        const result = await inputService.handleFrame(
+          event.sessionId,
+          event.raw,
+          current.phase,
+          current.targetTabId,
+        );
+        if (
+          !result.ok &&
+          (result.code === 'REPLAY_REJECTED' || result.code === 'MESSAGE_INVALID')
+        ) {
+          // Protocol abuse → tear the session down (fail closed).
+          await teardownSession();
+        }
         return;
+      }
       case 'sender:protocolViolation':
         await teardownSession();
         return;
@@ -301,6 +358,7 @@ export default defineBackground(() => {
     if (activeSessionId) {
       await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
     }
+    await inputService.stop();
     activeSessionId = null;
     const state = await store.load();
     if (state.phase !== 'enabled' && state.phase !== 'idle') {
@@ -388,6 +446,7 @@ export default defineBackground(() => {
       await sendToOffscreen({ type: 'sender:stopSession', sessionId: activeSessionId }, 3000);
       activeSessionId = null;
     }
+    await inputService.stop();
     stopSignaling();
     await sendToOffscreen({ type: 'offscreen:stopCapture' }, 3000);
     await closeOffscreenDocument();

@@ -120,7 +120,8 @@ export type SenderRequest =
         usernameFragment: string | null;
       } | null;
     }
-  | { type: 'sender:stopSession'; sessionId: string };
+  | { type: 'sender:stopSession'; sessionId: string }
+  | { type: 'sender:sendControl'; sessionId: string; raw: string };
 
 export type IceCandidateInitLike = {
   candidate: string;
@@ -165,6 +166,13 @@ export function isSenderRequest(value: unknown): value is SenderRequest {
       return typeof v.sessionId === 'string' && isIceCandidateInitLike(v.candidate);
     case 'sender:stopSession':
       return typeof v.sessionId === 'string';
+    case 'sender:sendControl':
+      return (
+        typeof v.sessionId === 'string' &&
+        typeof v.raw === 'string' &&
+        v.raw.length > 0 &&
+        v.raw.length <= 16_384
+      );
     default:
       return false;
   }

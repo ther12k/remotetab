@@ -292,6 +292,7 @@ describe('misc schemas', () => {
         'key.up',
         'text.insert',
         'viewport.request',
+        'viewport.sync',
         'session.stop',
       ].sort(),
     );

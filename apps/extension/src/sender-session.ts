@@ -60,6 +60,11 @@ export function handleSenderRequest(raw: unknown): boolean {
     case 'sender:stopSession':
       if (!session || session.id === req.sessionId) closeSession();
       return true;
+    case 'sender:sendControl':
+      if (session && session.id === req.sessionId) {
+        session.handle.sendControl(req.raw);
+      }
+      return true;
   }
   return false;
 }
