@@ -35,6 +35,7 @@ function render(state: SessionState): void {
   const enableBtn = document.getElementById('enable') as HTMLButtonElement | null;
   const stopBtn = document.getElementById('stop') as HTMLButtonElement | null;
   const errorEl = document.getElementById('error');
+  const captureEl = document.getElementById('capture');
   if (!phaseEl || !enableBtn || !stopBtn || !errorEl) return;
 
   const active = state.phase !== 'idle';
@@ -43,6 +44,10 @@ function render(state: SessionState): void {
   enableBtn.hidden = active;
   stopBtn.hidden = !active;
   errorEl.textContent = state.error?.message ?? '';
+  if (captureEl) {
+    captureEl.hidden = !active;
+    captureEl.textContent = state.phase === 'idle' ? '' : `Capture: ${state.capture}`;
+  }
 }
 
 async function refreshTab(): Promise<void> {
@@ -67,7 +72,20 @@ async function onEnable(): Promise<void> {
     if (errorEl) errorEl.textContent = 'No active tab found.';
     return;
   }
-  const res = await sendPopupRequest({ type: 'enableRemote', tabId: tab.id });
+  // The streamId MUST be requested inside this click handler: tabCapture
+  // requires a local user gesture (ADR-013). The offscreen document consumes
+  // the id; it can never be obtained in the background without a gesture.
+  let streamId: string;
+  try {
+    streamId = await browser.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+  } catch {
+    if (errorEl) {
+      errorEl.textContent =
+        'Chrome refused to capture this tab. Click Enable Remote again on the tab you want to share.';
+    }
+    return;
+  }
+  const res = await sendPopupRequest({ type: 'enableRemote', tabId: tab.id, streamId });
   if (!res.ok && res.error && errorEl) {
     errorEl.textContent = res.error.message;
   } else if (res.state) {

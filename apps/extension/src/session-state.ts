@@ -6,6 +6,9 @@
  *   IDLE -> ENABLED -> SIGNALING -> PEER_CONNECTED -> AUTHENTICATING
  *        -> REMOTE_ACTIVE -> RECONNECTING -> STOPPING -> IDLE
  * Any failure path funnels into STOPPING -> IDLE (fail closed).
+ *
+ * `capture` tracks the selected-tab MediaStream lifecycle independently of
+ * the peer phase: capture can be active while still waiting for a peer.
  */
 
 export const SESSION_PHASES = [
@@ -21,6 +24,9 @@ export const SESSION_PHASES = [
 
 export type SessionPhase = (typeof SESSION_PHASES)[number];
 
+export const CAPTURE_PHASES = ['idle', 'starting', 'active', 'error'] as const;
+export type CapturePhase = (typeof CAPTURE_PHASES)[number];
+
 export type SessionError = {
   code: string;
   /** User-readable message; never includes raw exception text or page content. */
@@ -29,6 +35,7 @@ export type SessionError = {
 
 export type SessionState = {
   phase: SessionPhase;
+  capture: CapturePhase;
   /** The one selected tab RemoteTab is attached to (null when idle). */
   targetTabId: number | null;
   error: SessionError | null;
@@ -38,6 +45,7 @@ export type SessionState = {
 
 export const INITIAL_STATE: SessionState = {
   phase: 'idle',
+  capture: 'idle',
   targetTabId: null,
   error: null,
   sinceMs: 0,
@@ -45,6 +53,9 @@ export const INITIAL_STATE: SessionState = {
 
 export type SessionEvent =
   | { type: 'enable'; tabId: number; nowMs: number }
+  | { type: 'capture-starting'; nowMs: number }
+  | { type: 'capture-active'; nowMs: number }
+  | { type: 'capture-failed'; code: string; message: string; nowMs: number }
   | { type: 'signaling'; nowMs: number }
   | { type: 'peer-connected'; nowMs: number }
   | { type: 'authenticating'; nowMs: number }
@@ -74,8 +85,21 @@ export function transition(state: SessionState, event: SessionEvent): SessionSta
     case 'enable':
       return {
         phase: 'enabled',
+        capture: 'starting',
         targetTabId: event.tabId,
         error: null,
+        sinceMs: event.nowMs,
+      };
+    case 'capture-starting':
+      return { ...state, capture: 'starting', error: null, sinceMs: event.nowMs };
+    case 'capture-active':
+      return { ...state, capture: 'active', error: null, sinceMs: event.nowMs };
+    case 'capture-failed':
+      return {
+        ...state,
+        phase: 'stopping',
+        capture: 'error',
+        error: { code: event.code, message: event.message },
         sinceMs: event.nowMs,
       };
     case 'signaling':
@@ -91,7 +115,13 @@ export function transition(state: SessionState, event: SessionEvent): SessionSta
     case 'stop':
       return { ...state, phase: 'stopping', error: null, sinceMs: event.nowMs };
     case 'stopped':
-      return { phase: 'idle', targetTabId: null, error: null, sinceMs: event.nowMs };
+      return {
+        phase: 'idle',
+        capture: 'idle',
+        targetTabId: null,
+        error: null,
+        sinceMs: event.nowMs,
+      };
     case 'fail':
       // Fail closed: surface the error and go straight to stopping.
       return {
