@@ -15,6 +15,7 @@ export class TouchBridge {
   private sender: PrioritizedInputSender;
   private cleanupFns: (() => void)[] = [];
   private active = false;
+  private ownsSender = false;
 
   constructor(
     private readonly opts: {
@@ -22,6 +23,8 @@ export class TouchBridge {
       video: HTMLVideoElement;
       session: ReceiverSession;
       mode?: Mode;
+      /** Shared sender (keyboard + touch share one ordering queue). */
+      sender?: PrioritizedInputSender;
       moveIntervalMs?: number;
       wheelIntervalMs?: number;
       /** Pixels of finger travel mapped to one wheel notch step. */
@@ -72,7 +75,6 @@ export class TouchBridge {
     return () => {
       for (const fn of this.cleanupFns) fn();
       this.cleanupFns = [];
-      this.sender.dispose();
     };
   }
 
@@ -151,6 +153,6 @@ export class TouchBridge {
   }
 
   dispose(): void {
-    this.sender.dispose();
+    if (this.ownsSender) this.sender.dispose();
   }
 }

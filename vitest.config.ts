@@ -12,5 +12,6 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     passWithNoTests: true,
+    environmentMatchGlobs: [['apps/mobile-web/src/**/*bridge*.test.ts', 'jsdom']],
   },
 });

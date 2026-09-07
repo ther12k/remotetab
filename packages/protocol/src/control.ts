@@ -123,6 +123,9 @@ export const controlMessageSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...envelopeBase, type: z.literal('session.stop'), payload: sessionStopSchema }),
 ]);
 
+/** Key down/up payload alias used by the keyboard bridge + CDP adapter. */
+export type RemoteKey = ControlPayload<'key.down'>;
+
 export type ControlMessageType =
   | 'pointer.move'
   | 'pointer.down'
@@ -224,11 +227,11 @@ export class ControlSender {
     return encodeControlFrame(this.frame('wheel', { x, y, deltaX, deltaY }));
   }
 
-  keyDown(key: string, code: string, modifiers = MODIFIER.NONE) {
+  keyDown(key: string, code: string, modifiers: number = MODIFIER.NONE) {
     return encodeControlFrame(this.frame('key.down', { key, code, modifiers }));
   }
 
-  keyUp(key: string, code: string, modifiers = MODIFIER.NONE) {
+  keyUp(key: string, code: string, modifiers: number = MODIFIER.NONE) {
     return encodeControlFrame(this.frame('key.up', { key, code, modifiers }));
   }
 
