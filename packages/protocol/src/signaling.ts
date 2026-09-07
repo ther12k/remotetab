@@ -33,6 +33,11 @@ export const helloOkSchema = z.strictObject({
 
 export const pairCreateSchema = z.strictObject({
   ttlSeconds: z.number().int().min(30).max(300).default(300),
+  /** Desktop ECDSA P-256 SPKI public key, base64url — relayed in pair.accepted. */
+  publicKeySpki: z.string().regex(BASE64URL_PATTERN).max(256),
+  /** Desktop key fingerprint; the phone checks it against the QR it scanned. */
+  publicKeyFingerprint: z.string().regex(BASE64URL_PATTERN).max(64),
+  displayName: displayableText(MAX_DISPLAY_NAME_LENGTH).optional(),
 });
 
 export const pairCreatedSchema = z.strictObject({

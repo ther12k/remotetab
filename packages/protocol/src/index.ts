@@ -43,6 +43,7 @@ export {
   toProtocolError,
   unitCoord,
 } from './frame.ts';
+export { isValidId, newDeviceId, newId, newPairId, newRequestId, newSessionId } from './ids.ts';
 export * from './limits.ts';
 export { CODES, isErrorCode, ProtocolError } from './protocol-error.ts';
 export {

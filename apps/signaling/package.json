@@ -11,5 +11,9 @@
   },
   "devDependencies": {
     "bun-types": "^1.4.2"
+  },
+  "dependencies": {
+    "@remotetab/protocol": "workspace:*",
+    "hono": "^4.13.7"
   }
 }
