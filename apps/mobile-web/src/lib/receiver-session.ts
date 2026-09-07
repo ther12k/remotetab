@@ -31,7 +31,7 @@ import {
   signalIceSchema,
   signalingFrame,
 } from '@remotetab/protocol';
-import { RTCPeerHandle } from '@remotetab/webrtc';
+import { describeSelectedPair, RTCPeerHandle } from '@remotetab/webrtc';
 import { getPairedDesktop, loadPhoneKeys } from './pairing.ts';
 
 export type RemotePhase =
@@ -131,6 +131,18 @@ export class ReceiverSession {
   /** The accepted session id, or null before acceptance. */
   get sessionId(): string | null {
     return this.sessionIdValue;
+  }
+
+  /** Safe diagnostics snapshot (never contains prompt or page content). */
+  async getDiagnostics(): Promise<{
+    transport: 'relay' | 'direct' | 'unknown';
+    rttMs: number | null;
+  }> {
+    if (!this.peer) return { transport: 'unknown', rttMs: null };
+    const pair = await describeSelectedPair(this.peer.pc);
+    return pair
+      ? { transport: pair.transport, rttMs: pair.rttMs }
+      : { transport: 'unknown', rttMs: null };
   }
 
   connect(): void {

@@ -23,6 +23,7 @@ export function Viewer(props: {
   const [trackInfo, setTrackInfo] = useState<{ w: number; h: number } | null>(null);
   const [mode, setMode] = useState<Mode>('pointer');
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [diag, setDiag] = useState<{ transport: string; rttMs: number | null } | null>(null);
 
   // One shared sender keeps touch + keyboard frames ordered end-to-end.
   const sender = useMemo(() => {
@@ -77,6 +78,23 @@ export function Viewer(props: {
     };
   }, [session, mode, controlOpen, sender]);
 
+  // Poll connection diagnostics (safe snapshot: no prompt/page content).
+  useEffect(() => {
+    if (!session || !keyboardOpen) return;
+    let alive = true;
+    const poll = () => {
+      void session.getDiagnostics().then((d) => {
+        if (alive) setDiag(d);
+      });
+    };
+    poll();
+    const t = setInterval(poll, 2000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [session, keyboardOpen]);
+
   const onFullscreen = useCallback(() => {
     const el = wrapRef.current;
     if (el && document.fullscreenEnabled) {
@@ -96,7 +114,12 @@ export function Viewer(props: {
   return (
     <main className="viewer">
       <header>
-        <span className={`chip ${chip.cls}`}>{chip.text}</span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <span className={`chip ${chip.cls}`}>{chip.text}</span>
+          <span className={`chip ${controlOpen ? 'ok' : ''}`}>
+            {controlOpen ? 'Input on' : 'Input off'}
+          </span>
+        </div>
         <button type="button" className="ghost" onClick={onDisconnect}>
           Disconnect
         </button>
@@ -155,6 +178,10 @@ export function Viewer(props: {
             mode: {mode}
             <br />
             video: {trackInfo ? `${trackInfo.w}×${trackInfo.h}` : '—'}
+            <br />
+            transport: {diag?.transport ?? '…'}
+            <br />
+            rtt: {diag?.rttMs !== null && diag !== null ? `${diag.rttMs} ms` : '—'}
           </code>
         </details>
       </footer>
