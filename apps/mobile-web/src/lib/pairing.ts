@@ -9,6 +9,7 @@ import {
   decodePairingPayload,
   exportPrivateKeyPkcs8,
   exportPublicKeySpki,
+  fingerprintFromSpkiB64,
   generateSigningKeyPair,
   importPrivateKeyPkcs8,
   keyFingerprint,
@@ -134,6 +135,57 @@ export function desktopFingerprintMatches(
   return acceptedFingerprint === payload.desktopFingerprint;
 }
 
+/** The desktop identity fields relayed by signaling in pair.accepted. */
+export type AcceptedDesktop = {
+  deviceId: string;
+  displayName?: string;
+  publicKeySpki: string;
+  publicKeyFingerprint: string;
+};
+
+/**
+ * Validate the desktop identity for pairing (audit issue #23). A hostile
+ * signaling relay must not be able to substitute the desktop key:
+ *  1. the claimed fingerprint must equal the QR fingerprint (TOFU anchor);
+ *  2. the fingerprint must be the LOCAL hash of the received SPKI bytes;
+ *  3. the received SPKI must byte-match the QR's desktopSpki — the QR is the
+ *     source of truth and the stored identity is built from it.
+ */
+export async function validateAcceptedDesktop(
+  payload: PairingPayloadV1,
+  accepted: AcceptedDesktop,
+): Promise<{ ok: true; desktop: PairedDesktop } | { ok: false; reason: string }> {
+  if (!desktopFingerprintMatches(payload, accepted.publicKeyFingerprint)) {
+    return {
+      ok: false,
+      reason: 'The laptop identity changed since the QR was shown. Pair again.',
+    };
+  }
+  const computed = await fingerprintFromSpkiB64(accepted.publicKeySpki);
+  if (computed !== accepted.publicKeyFingerprint) {
+    return {
+      ok: false,
+      reason: 'The laptop key does not match its claimed fingerprint. Pairing aborted.',
+    };
+  }
+  if (accepted.publicKeySpki !== payload.desktopSpki) {
+    return {
+      ok: false,
+      reason: 'The laptop key does not match the QR code. Pairing aborted.',
+    };
+  }
+  return {
+    ok: true,
+    desktop: {
+      deviceId: accepted.deviceId,
+      displayName: accepted.displayName,
+      publicKeySpki: payload.desktopSpki,
+      fingerprint: payload.desktopFingerprint,
+      pairedAtMs: Date.now(),
+    },
+  };
+}
+
 /**
  * Dedicated pairing session over signaling: hello(phone) → pair.join →
  * pair.accepted | pair.rejected. Closed as soon as pairing settles.
@@ -183,28 +235,14 @@ export class PairingSession {
         return;
       }
       if (frame.type === 'pair.accepted') {
-        const desktop = frame.payload.desktop as {
-          deviceId: string;
-          displayName?: string;
-          publicKeySpki: string;
-          publicKeyFingerprint: string;
-        };
-        if (!desktopFingerprintMatches(this.opts.payload, desktop.publicKeyFingerprint)) {
-          this.settle({
-            ok: false,
-            reason: 'The laptop identity changed since the QR was shown. Pair again.',
-          });
+        const desktop = frame.payload.desktop as AcceptedDesktop;
+        const check = await validateAcceptedDesktop(this.opts.payload, desktop);
+        if (!check.ok) {
+          this.settle({ ok: false, reason: check.reason });
           return;
         }
-        const stored: PairedDesktop = {
-          deviceId: desktop.deviceId,
-          displayName: desktop.displayName,
-          publicKeySpki: desktop.publicKeySpki,
-          fingerprint: desktop.publicKeyFingerprint,
-          pairedAtMs: Date.now(),
-        };
-        await storeDesktop(stored);
-        this.settle({ ok: true, desktop: stored });
+        await storeDesktop(check.desktop);
+        this.settle({ ok: true, desktop: check.desktop });
         return;
       }
       if (frame.type === 'pair.rejected' || frame.type === 'error') {

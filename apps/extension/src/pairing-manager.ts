@@ -8,6 +8,7 @@
 import {
   decodePairingPayload,
   encodePairingPayload,
+  fingerprintFromSpkiB64,
   generatePairingNonce,
   generatePairingSecret,
   type PairingPayloadV1 as Payload,
@@ -40,10 +41,16 @@ export class PairingManager {
     },
   ) {}
 
-  /** Create a pairing and return the QR payload for the popup. */
-  async create(ttlSeconds = 300): Promise<{ payload: string; expiresAtMs: number }> {
-    const secret = generatePairingSecret();
-    const nonce = generatePairingNonce();
+  /**
+   * Create a pairing and return the QR payload for the popup. `hooks` lets
+   * tests pin the secret/nonce so proofs can be computed externally.
+   */
+  async create(
+    ttlSeconds = 300,
+    hooks?: { secret?: string; nonce?: string },
+  ): Promise<{ payload: string; expiresAtMs: number }> {
+    const secret = hooks?.secret ?? generatePairingSecret();
+    const nonce = hooks?.nonce ?? generatePairingNonce();
     const now = this.deps.nowMs?.() ?? Date.now();
     // pairId arrives from the server; a local placeholder id fills the payload
     // until pair.created correlates back. We rebuild the payload then.
@@ -110,6 +117,16 @@ export class PairingManager {
       this.pending = null;
       this.deps.send(signalingFrame('pair.reject', { pairId: join.pairId, code: 'PAIR_EXPIRED' }));
       return { ok: false, reason: 'expired' };
+    }
+    // The claimed phone fingerprint must be the hash of the presented key
+    // bytes (audit issue #23): a hostile relay must not be able to swap the
+    // SPKI while keeping fingerprint and proof intact.
+    const computedPhoneFingerprint = await fingerprintFromSpkiB64(join.publicKeySpki);
+    if (computedPhoneFingerprint !== join.publicKeyFingerprint) {
+      this.deps.send(
+        signalingFrame('pair.reject', { pairId: join.pairId, code: 'PAIR_INVALID_PROOF' }),
+      );
+      return { ok: false, reason: 'phone key does not match its claimed fingerprint' };
     }
     const proof = await verifyPairingProof(
       pending.payload.secret,
