@@ -15,7 +15,7 @@
   "scripts": {
     "lint": "biome check .",
     "format": "biome format --write .",
-    "typecheck": "bun run typecheck:packages && bun run typecheck:signaling && bun run typecheck:extension",
+    "typecheck": "bun run typecheck:packages && bun run typecheck:signaling && bun run typecheck:extension && bun run typecheck:mobile",
     "typecheck:packages": "tsc --noEmit -p packages/protocol && tsc --noEmit -p packages/crypto && tsc --noEmit -p packages/webrtc && tsc --noEmit -p packages/config && tsc --noEmit -p packages/testkit",
     "typecheck:signaling": "tsc --noEmit -p apps/signaling",
     "typecheck:extension": "cd apps/extension && bun run prepare:types && bunx tsc --noEmit -p .",
