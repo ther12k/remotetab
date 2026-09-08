@@ -7,8 +7,12 @@
  *   5. pointer move  (coalesced: only the latest position is kept)
  *
  * The underlying transport is the reliable ordered control channel; drops
- * only ever affect stale moves/wheel, never state-changing input. Encoders
- * are supplied by the caller so this class stays protocol-agnostic.
+ * only ever affect stale moves/wheel, never state-changing input.
+ *
+ * Callers supply ENCODER CLOSURES, not pre-encoded frames (audit issue #22):
+ * frames are built at send time so sequence numbers are assigned strictly in
+ * send order. A queued urgent frame encodes exactly once — retries reuse the
+ * encoded string instead of burning new sequence numbers.
  */
 
 export type SenderTimers = {
@@ -21,12 +25,18 @@ const defaultTimers: SenderTimers = {
   clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 };
 
+type UrgentItem = {
+  build: () => string;
+  /** Cached encoded frame from the first attempt (stable seq across retries). */
+  encoded: string | null;
+};
+
 export class PrioritizedInputSender {
-  private latestMove: string | null = null;
+  private latestMove: (() => string) | null = null;
   private moveTimer: unknown = null;
   private pendingWheel: { x: number; y: number; deltaX: number; deltaY: number } | null = null;
   private wheelTimer: unknown = null;
-  private urgentQueue: string[] = [];
+  private urgentQueue: UrgentItem[] = [];
   private retryTimer: unknown = null;
   private droppedMoves = 0;
   private sentFrames = 0;
@@ -52,9 +62,9 @@ export class PrioritizedInputSender {
     };
   }
 
-  /** Pointer move: keep only the latest; flush at the move interval. */
-  sendMove(raw: string): void {
-    this.latestMove = raw;
+  /** Pointer move: keep only the latest builder; encode + flush at the interval. */
+  sendMove(build: () => string): void {
+    this.latestMove = build;
     if (this.moveTimer !== null) return;
     const timers = this.opts.timers ?? defaultTimers;
     this.moveTimer = timers.set(() => {
@@ -64,9 +74,11 @@ export class PrioritizedInputSender {
   }
 
   private flushMove(): boolean {
-    const raw = this.latestMove;
+    const build = this.latestMove;
     this.latestMove = null;
-    if (raw === null) return false;
+    if (build === null) return false;
+    const raw = build();
+    if (raw === '') return false; // no live session: nothing to send
     if (this.opts.send(raw)) {
       this.sentFrames += 1;
       return true;
@@ -99,7 +111,9 @@ export class PrioritizedInputSender {
     const pending = this.pendingWheel;
     this.pendingWheel = null;
     if (pending === null) return false;
-    if (this.opts.send(this.opts.encodeWheel(pending))) {
+    const raw = this.opts.encodeWheel(pending);
+    if (raw === '') return false; // no live session: nothing to send
+    if (this.opts.send(raw)) {
       this.sentFrames += 1;
       return true;
     }
@@ -109,17 +123,24 @@ export class PrioritizedInputSender {
   }
 
   /** Key/button/text: enqueue and never drop; retried while congested. */
-  sendUrgent(raw: string): boolean {
-    this.urgentQueue.push(raw);
+  sendUrgent(build: () => string): boolean {
+    this.urgentQueue.push({ build, encoded: null });
     this.flushUrgent();
     return this.urgentQueue.length === 0;
   }
 
   private flushUrgent(): void {
     while (this.urgentQueue.length > 0) {
-      const raw = this.urgentQueue[0];
-      if (raw === undefined) break;
-      if (!this.opts.send(raw)) break; // congested/closed: stop, keep order
+      const item = this.urgentQueue[0];
+      if (item === undefined) break;
+      // Encode on the first attempt only so retries never mint new seqs.
+      if (item.encoded === null) item.encoded = item.build();
+      if (item.encoded === '') {
+        // No live session when encoded: drop instead of queueing junk.
+        this.urgentQueue.shift();
+        continue;
+      }
+      if (!this.opts.send(item.encoded)) break; // congested/closed: stop, keep order
       this.urgentQueue.shift();
       this.sentFrames += 1;
     }

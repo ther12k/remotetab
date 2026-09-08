@@ -361,8 +361,62 @@ export class ReceiverSession {
    */
   sendControlFrame(build: (sender: ControlSender) => string): boolean {
     const sender = this.controlSender;
-    if (sender === null || this.sessionIdValue === null) return false;
+    if (sender === null) return false;
     return this.peer?.sendControl(build(sender)) ?? false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Product-level input encoders (audit issue #22). ReceiverSession is the
+  // ONLY owner of the phone→laptop sequence space: bridges and UI layers call
+  // these methods and never construct a ControlSender themselves. They return
+  // the encoded frame ('' when no session is live) so queueing senders can
+  // encode at send time and sequence numbers are handed out strictly in send
+  // order.
+  // ---------------------------------------------------------------------------
+
+  encodePointerMove(x: number, y: number): string {
+    return this.encodeWith((s) => s.pointerMove(x, y));
+  }
+
+  encodePointerDown(
+    x: number,
+    y: number,
+    button: 'left' | 'right' | 'middle' = 'left',
+    clickCount = 1,
+  ): string {
+    return this.encodeWith((s) => s.pointerDown(x, y, button, clickCount));
+  }
+
+  encodePointerUp(
+    x: number,
+    y: number,
+    button: 'left' | 'right' | 'middle' = 'left',
+    clickCount = 1,
+  ): string {
+    return this.encodeWith((s) => s.pointerUp(x, y, button, clickCount));
+  }
+
+  encodeWheel(x: number, y: number, deltaX: number, deltaY: number): string {
+    return this.encodeWith((s) => s.wheel(x, y, deltaX, deltaY));
+  }
+
+  encodeInsertText(text: string): string {
+    return this.encodeWith((s) => s.insertText(text));
+  }
+
+  encodeKeyDown(key: string, code: string, modifiers?: number): string {
+    return this.encodeWith((s) => s.keyDown(key, code, modifiers));
+  }
+
+  encodeKeyUp(key: string, code: string, modifiers?: number): string {
+    return this.encodeWith((s) => s.keyUp(key, code, modifiers));
+  }
+
+  /** Encode via the persistent sender; '' when the session is not live. */
+  private encodeWith(build: (sender: ControlSender) => string): string {
+    const sender = this.controlSender;
+    if (sender === null) return '';
+    return build(sender);
   }
 
   /** Answer the signaling WS device-auth challenge (#018). */
