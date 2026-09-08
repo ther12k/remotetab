@@ -4,7 +4,6 @@
  * (letterbox-aware); letterbox and out-of-bounds touches are rejected.
  */
 
-import { ControlSender, type ControlSender as ProtocolControlSender } from '@remotetab/protocol';
 import { GestureClassifier, type Mode, type TouchPoint } from './gesture.ts';
 import { PrioritizedInputSender, type SenderTimers } from './input-sender.ts';
 import type { ReceiverSession } from './receiver-session.ts';
@@ -33,10 +32,12 @@ export class TouchBridge {
     },
   ) {
     this.classifier = new GestureClassifier(opts.mode ?? 'pointer');
+    // Encoders delegate to the session's ONE persistent sequence owner (#22);
+    // wheel encodes lazily at flush time with the accumulated deltas.
     this.sender = new PrioritizedInputSender({
       send: (raw) => this.opts.session.sendControl(raw),
       encodeWheel: (d) =>
-        this.encode((s) => s.wheel(d.x, d.y, Math.round(d.deltaX), Math.round(d.deltaY))),
+        this.opts.session.encodeWheel(d.x, d.y, Math.round(d.deltaX), Math.round(d.deltaY)),
       moveIntervalMs: opts.moveIntervalMs,
       wheelIntervalMs: opts.wheelIntervalMs,
       timers: opts.timers,
@@ -115,7 +116,7 @@ export class TouchBridge {
     switch (gesture.kind) {
       case 'drag-start':
       case 'drag-move':
-        this.sender.sendMove(this.encode((s) => s.pointerMove(point.x, point.y)));
+        this.sender.sendMove(() => this.opts.session.encodePointerMove(point.x, point.y));
         return;
       case 'wheel':
         this.sender.sendWheel({
@@ -139,19 +140,13 @@ export class TouchBridge {
     if (gesture.kind === 'tap') {
       // Flush a pending move so the click lands at a fresh position.
       this.sender.flushNow();
-      this.sender.sendUrgent(
-        this.encode((s) => s.pointerDown(point.x, point.y, 'left', gesture.clickCount)),
+      this.sender.sendUrgent(() =>
+        this.opts.session.encodePointerDown(point.x, point.y, 'left', gesture.clickCount),
       );
-      this.sender.sendUrgent(
-        this.encode((s) => s.pointerUp(point.x, point.y, 'left', gesture.clickCount)),
+      this.sender.sendUrgent(() =>
+        this.opts.session.encodePointerUp(point.x, point.y, 'left', gesture.clickCount),
       );
     }
-  }
-
-  private encode(build: (s: ProtocolControlSender) => string): string {
-    const sessionId = this.opts.session.sessionId;
-    if (sessionId === null) return '';
-    return build(new ControlSender(sessionId));
   }
 
   dispose(): void {

@@ -39,12 +39,38 @@ describe('PrioritizedInputSender', () => {
       moveIntervalMs: 30,
       timers: clock.timers,
     });
-    s.sendMove('move1');
-    s.sendMove('move2');
-    s.sendMove('move3');
+    s.sendMove(() => 'move1');
+    s.sendMove(() => 'move2');
+    s.sendMove(() => 'move3');
     clock.advance(30);
     expect(sent).toEqual(['move3']); // only the latest position ever sent
     expect(s.stats.droppedMoves).toBe(0);
+    s.dispose();
+  });
+
+  it('does not encode a move until its flush fires', () => {
+    // Sequence numbers are minted at encode time (#22): a queued move must
+    // not consume one before it is actually sent.
+    const clock = makeClock();
+    let encodes = 0;
+    const sent: string[] = [];
+    const s = new PrioritizedInputSender({
+      send: (raw) => {
+        sent.push(raw);
+        return true;
+      },
+      encodeWheel: () => 'wheel',
+      moveIntervalMs: 30,
+      timers: clock.timers,
+    });
+    s.sendMove(() => {
+      encodes += 1;
+      return 'move1';
+    });
+    expect(encodes).toBe(0);
+    clock.advance(30);
+    expect(encodes).toBe(1);
+    expect(sent).toEqual(['move1']);
     s.dispose();
   });
 
@@ -62,12 +88,12 @@ describe('PrioritizedInputSender', () => {
       moveIntervalMs: 30,
       timers: clock.timers,
     });
-    s.sendMove('move1');
+    s.sendMove(() => 'move1');
     clock.advance(30);
     expect(sent).toEqual([]);
     expect(s.stats.droppedMoves).toBe(1); // stale move dropped under pressure
     congested = false;
-    s.sendMove('move2');
+    s.sendMove(() => 'move2');
     clock.advance(30);
     expect(sent).toEqual(['move2']);
     s.dispose();
@@ -87,13 +113,42 @@ describe('PrioritizedInputSender', () => {
       retryMs: 10,
       timers: clock.timers,
     });
-    expect(s.sendUrgent('keyDown-a')).toBe(false); // queued
-    expect(s.sendUrgent('keyUp-a')).toBe(false);
+    expect(s.sendUrgent(() => 'keyDown-a')).toBe(false); // queued
+    expect(s.sendUrgent(() => 'keyUp-a')).toBe(false);
     expect(sent).toEqual([]);
     congested = false;
     clock.advance(10); // retry fires → both flush in order
     expect(sent).toEqual(['keyDown-a', 'keyUp-a']);
     expect(s.stats.queuedUrgent).toBe(0);
+    s.dispose();
+  });
+
+  it('encodes an urgent frame exactly once — retries reuse the encoded frame (#22)', () => {
+    const clock = makeClock();
+    let congested = true;
+    let encodes = 0;
+    const sent: string[] = [];
+    const s = new PrioritizedInputSender({
+      send: (raw) => {
+        if (congested) return false;
+        sent.push(raw);
+        return true;
+      },
+      encodeWheel: () => 'wheel',
+      retryMs: 10,
+      timers: clock.timers,
+    });
+    s.sendUrgent(() => {
+      encodes += 1;
+      return `frame-${encodes}`;
+    });
+    // Eagerly encoded on the first (failed) attempt and NOT re-encoded later.
+    expect(encodes).toBe(1);
+    congested = false;
+    clock.advance(10);
+    clock.advance(10);
+    expect(sent).toEqual(['frame-1']);
+    expect(encodes).toBe(1);
     s.dispose();
   });
 
@@ -132,8 +187,8 @@ describe('PrioritizedInputSender.reset', () => {
       moveIntervalMs: 30,
       timers: clock.timers,
     });
-    s.sendUrgent('keyDown-a'); // queued (congested)
-    s.sendMove('move1'); // pending flush
+    s.sendUrgent(() => 'keyDown-a'); // queued (congested)
+    s.sendMove(() => 'move1'); // pending flush
     s.sendWheel({ x: 0.5, y: 0.5, deltaX: 0, deltaY: 40 }); // pending
     s.reset();
     congested = false;

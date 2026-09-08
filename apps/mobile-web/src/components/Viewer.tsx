@@ -1,4 +1,3 @@
-import { ControlSender } from '@remotetab/protocol';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Mode } from '../lib/gesture.ts';
 import { PrioritizedInputSender } from '../lib/input-sender.ts';
@@ -26,19 +25,12 @@ export function Viewer(props: {
   const [diag, setDiag] = useState<{ transport: string; rttMs: number | null } | null>(null);
 
   // One shared sender keeps touch + keyboard frames ordered end-to-end.
+  // Wheel frames encode through the session's persistent sequence owner (#22).
   const sender = useMemo(() => {
     if (!session) return null;
-    const encodeWheel =
-      (sessionId: string) => (d: { x: number; y: number; deltaX: number; deltaY: number }) => {
-        const cs = new ControlSender(sessionId);
-        return cs.wheel(d.x, d.y, Math.round(d.deltaX), Math.round(d.deltaY));
-      };
     return new PrioritizedInputSender({
       send: (raw) => session.sendControl(raw),
-      encodeWheel: (d) => {
-        const sessionId = session.sessionId ?? '';
-        return encodeWheel(sessionId)(d);
-      },
+      encodeWheel: (d) => session.encodeWheel(d.x, d.y, Math.round(d.deltaX), Math.round(d.deltaY)),
     });
   }, [session]);
 

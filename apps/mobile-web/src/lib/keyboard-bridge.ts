@@ -112,17 +112,17 @@ export class KeyboardBridge {
   sendText(text: string): void {
     if (text.length === 0) return;
     for (const chunk of splitTextChunks(text, CHUNK)) {
-      this.opts.sender.sendUrgent(this.encode((s) => s.insertText(chunk)));
+      this.opts.sender.sendUrgent(() => this.opts.session.encodeInsertText(chunk));
     }
     this.opts.onSent?.();
   }
 
   sendKey(control: NonNullable<ReturnType<typeof mapControlKey>>): void {
-    this.opts.sender.sendUrgent(
-      this.encode((s) => s.keyDown(control.key, control.code, control.modifiers)),
+    this.opts.sender.sendUrgent(() =>
+      this.opts.session.encodeKeyDown(control.key, control.code, control.modifiers),
     );
-    this.opts.sender.sendUrgent(
-      this.encode((s) => s.keyUp(control.key, control.code, control.modifiers)),
+    this.opts.sender.sendUrgent(() =>
+      this.opts.session.encodeKeyUp(control.key, control.code, control.modifiers),
     );
   }
 
@@ -135,17 +135,7 @@ export class KeyboardBridge {
     if (control) this.sendKey(control);
   }
 
-  private encode(build: Parameters<ReceiverSession['sendControlFrame']>[0]): string {
-    return build(makeEncoder(this.opts.session));
-  }
-
   dispose(): void {
     this.unbind();
   }
-}
-
-import { ControlSender } from '@remotetab/protocol';
-
-function makeEncoder(session: ReceiverSession): ControlSender {
-  return new ControlSender(session.sessionId ?? 'sess_nonexistent0000000001');
 }
