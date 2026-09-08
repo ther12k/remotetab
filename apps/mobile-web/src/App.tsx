@@ -1,4 +1,3 @@
-import { base64urlToBytes, importPrivateKeyPkcs8 } from '@remotetab/crypto';
 import { DEFAULT_ICE_SERVERS, fetchTurnIceServers } from '@remotetab/webrtc';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PairScreen } from './components/PairScreen.tsx';
@@ -73,7 +72,7 @@ export function App() {
     // Signed TURN requests (#29) need the device key; the fetch itself runs
     // lazily when the peer is created — after WS device auth registered us.
     const keys = await loadPhoneKeys();
-    const priv = await importPrivateKeyPkcs8(base64urlToBytes(keys.privateKeyPkcs8));
+    const priv = keys.privateKey;
     const session = new ReceiverSession({
       url: server.trim(),
       desktopDeviceId: laptopCode,

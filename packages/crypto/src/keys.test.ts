@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   bytesToBase64url,
+  exportPrivateKeyPkcs8,
   exportPublicKeySpki,
   fingerprintFromSpkiB64,
   generateSigningKeyPair,
+  importPrivateKeyPkcs8,
   keyFingerprint,
 } from './index.ts';
 
@@ -22,5 +24,23 @@ describe('SPKI fingerprint helpers', () => {
     const fa = await keyFingerprint(a.publicKey);
     const fb = await keyFingerprint(b.publicKey);
     expect(fa).not.toBe(fb);
+  });
+});
+
+describe('non-extractable private keys (#30)', () => {
+  it('a non-extractable import can sign but never export', async () => {
+    const pair = await generateSigningKeyPair();
+    const pkcs8 = await exportPrivateKeyPkcs8(pair.privateKey);
+    const hardened = await importPrivateKeyPkcs8(pkcs8, false);
+    expect(hardened.extractable).toBe(false);
+    // Signing works...
+    const sig = await crypto.subtle.sign(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      hardened,
+      new TextEncoder().encode('payload'),
+    );
+    expect(sig.byteLength).toBeGreaterThan(0);
+    // ...but the bytes can never leave again.
+    await expect(crypto.subtle.exportKey('pkcs8', hardened)).rejects.toThrow();
   });
 });

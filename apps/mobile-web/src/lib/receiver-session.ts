@@ -13,7 +13,6 @@ import {
   base64urlToBytes,
   bytesToBase64url,
   encodeTranscript,
-  importPrivateKeyPkcs8,
   importPublicKeySpki,
   PeerAuthHandshake,
 } from '@remotetab/crypto';
@@ -488,7 +487,7 @@ export class ReceiverSession {
     try {
       authChallengeSchema.parse({ nonce });
       const keys = await loadPhoneKeys();
-      const priv = await importPrivateKeyPkcs8(base64urlToBytes(keys.privateKeyPkcs8));
+      const priv = keys.privateKey;
       const signature = bytesToBase64url(
         new Uint8Array(
           await crypto.subtle.sign(
@@ -554,7 +553,7 @@ export class ReceiverSession {
       return;
     }
     const keys = await loadPhoneKeys();
-    const priv = await importPrivateKeyPkcs8(base64urlToBytes(keys.privateKeyPkcs8));
+    const priv = keys.privateKey;
     const pub = await importPublicKeySpki(base64urlToBytes(desktop.publicKeySpki));
     const SIGN = { name: 'ECDSA', hash: 'SHA-256' } as const;
     const deps: HandshakeDeps = {

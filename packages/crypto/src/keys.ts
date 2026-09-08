@@ -33,8 +33,19 @@ export async function importPublicKeySpki(spki: Uint8Array): Promise<CryptoKey> 
   return crypto.subtle.importKey('spki', spki as Uint8Array<ArrayBuffer>, P256, true, ['verify']);
 }
 
-export async function importPrivateKeyPkcs8(pkcs8: Uint8Array): Promise<CryptoKey> {
-  return crypto.subtle.importKey('pkcs8', pkcs8 as Uint8Array<ArrayBuffer>, P256, true, ['sign']);
+/**
+ * Import a PKCS#8 private signing key. Pass `extractable = false` for keys
+ * persisted by end devices (audit issue #30): the stored CryptoKey can then
+ * sign but its bytes can never be exported again, so compromising web
+ * storage yields at most a signing oracle, not the long-term secret.
+ */
+export async function importPrivateKeyPkcs8(
+  pkcs8: Uint8Array,
+  extractable = true,
+): Promise<CryptoKey> {
+  return crypto.subtle.importKey('pkcs8', pkcs8 as Uint8Array<ArrayBuffer>, P256, extractable, [
+    'sign',
+  ]);
 }
 
 /** SHA-256 digest of the SPKI encoding, truncated to 16 bytes (128-bit). */
