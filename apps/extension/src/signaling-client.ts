@@ -40,6 +40,8 @@ export type SignalingClientOptions = {
   onState: (state: SignalingState) => void;
   /** Injectable for tests. */
   socketFactory?: (url: string) => WebSocket;
+  /** Injectable clock for tests (pong deadline math). */
+  nowMs?: () => number;
   timers?: {
     set(fn: () => void, ms: number): unknown;
     clear(handle: unknown): void;
@@ -59,6 +61,7 @@ export class SignalingClient {
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly timers: NonNullable<SignalingClientOptions['timers']>;
+  private readonly nowMs: () => number;
 
   constructor(private readonly opts: SignalingClientOptions) {
     this.pingIntervalMs = opts.pingIntervalMs ?? 15_000;
@@ -67,6 +70,7 @@ export class SignalingClient {
       set: (fn, ms) => setTimeout(fn, ms),
       clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
     };
+    this.nowMs = opts.nowMs ?? Date.now;
   }
 
   current(): SignalingState {
@@ -93,14 +97,14 @@ export class SignalingClient {
     this.socket = socket;
     socket.onopen = () => {
       this.backoff.reset();
-      this.lastInboundMs = Date.now();
+      this.lastInboundMs = this.nowMs();
       const hello = helloSchema.parse(this.opts.hello);
       socket.send(JSON.stringify(signalingFrame('hello', hello)));
       this.setState('online');
       this.startPings();
     };
     socket.onmessage = (ev) => {
-      this.lastInboundMs = Date.now();
+      this.lastInboundMs = this.nowMs();
       const frame = decodeSignalingFrame(String(ev.data));
       if (!frame.ok) {
         // The server sent something the protocol rejects — treat as hostile
@@ -132,14 +136,21 @@ export class SignalingClient {
 
   private startPings(): void {
     this.stopPings();
-    this.pingHandle = this.timers.set(() => {
-      const pongOverdue = Date.now() - this.lastInboundMs > this.pongTimeoutMs;
-      if (pongOverdue) {
-        this.socket?.close(4000, 'stale');
-        return;
-      }
-      this.send(signalingFrame('presence.ping', presencePingSchema.parse({ ts: Date.now() })));
-    }, this.pingIntervalMs);
+    // Self-rescheduling chain (#26): one ping per interval for as long as the
+    // socket lives — the server evicts connections silent for 45s.
+    const schedule = (): void => {
+      this.pingHandle = this.timers.set(() => {
+        const pongOverdue = this.nowMs() - this.lastInboundMs > this.pongTimeoutMs;
+        if (pongOverdue) {
+          this.pingHandle = null;
+          this.socket?.close(4000, 'stale');
+          return;
+        }
+        this.send(signalingFrame('presence.ping', presencePingSchema.parse({ ts: Date.now() })));
+        schedule();
+      }, this.pingIntervalMs);
+    };
+    schedule();
   }
 
   private stopPings(): void {
@@ -209,9 +220,11 @@ export class SignalingClient {
       this.reconnectHandle = null;
     }
     this.backoff.reset();
+    // Capture the socket BEFORE stopSockets() detaches it (#26) so the
+    // underlying WebSocket actually gets a close frame.
+    const socket = this.socket;
     this.stopSockets();
-    this.socket?.close(1000, 'client-stop');
-    this.socket = null;
+    socket?.close(1000, 'client-stop');
     this.setState('offline');
   }
 }
