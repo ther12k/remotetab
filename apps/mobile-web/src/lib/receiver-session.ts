@@ -166,39 +166,63 @@ export class ReceiverSession {
       );
     };
     socket.onmessage = (ev) => this.onFrame(String(ev.data));
-    socket.onclose = () => {
-      this.stopPings();
-      if (this.phase !== 'ended' && this.phase !== 'idle') {
-        this.reconnectingSinceMs ??= (this.opts.nowMs ?? Date.now)();
-        if (
-          isReconnectExpired(
-            this.reconnectingSinceMs,
-            (this.opts.nowMs ?? Date.now)(),
-            this.reconnectTtlMs,
-          )
-        ) {
-          this.setStatus(
-            'ended',
-            'Could not reconnect within the time window. Connect again.',
-            'error',
-          );
-          this.cleanup();
-          return;
-        }
-        this.setStatus('reconnecting', 'Reconnecting securely…');
-      }
-      // Fresh peer connection + fresh session on every reconnect (#016).
-      this.closePeer();
-      this.socket = null;
-      if (this.phase !== 'ended' && this.phase !== 'idle') {
-        setTimeout(() => {
-          if (this.phase === 'reconnecting') this.connect();
-        }, 1500);
-      }
-    };
+    socket.onclose = () => this.handleSocketLost();
     socket.onerror = () => {
       // onclose follows.
     };
+  }
+
+  /**
+   * Signaling lost: unwind to a fresh session within the bounded reconnect
+   * window (#016). The peer connection is discarded — every new session
+   * gets a fresh one with fresh peer authentication.
+   */
+  private handleSocketLost(): void {
+    this.stopPings();
+    if (this.phase !== 'ended' && this.phase !== 'idle') {
+      this.reconnectingSinceMs ??= (this.opts.nowMs ?? Date.now)();
+      if (
+        isReconnectExpired(
+          this.reconnectingSinceMs,
+          (this.opts.nowMs ?? Date.now)(),
+          this.reconnectTtlMs,
+        )
+      ) {
+        this.setStatus('ended', 'Could not reconnect within the time window. Connect again.', 'error');
+        this.cleanup();
+        return;
+      }
+      this.setStatus('reconnecting', 'Reconnecting securely…');
+    }
+    // Fresh peer connection + fresh session on every reconnect (#016).
+    this.closePeer();
+    this.socket = null;
+    if (this.phase !== 'ended' && this.phase !== 'idle') {
+      setTimeout(() => {
+        if (this.phase === 'reconnecting') this.connect();
+      }, 1500);
+    }
+  }
+
+  /**
+   * Peer-only failure (audit issue #27): the media transport died. Flip the
+   * UI state AND recycle the whole session — otherwise the app sits in
+   * "reconnecting" forever while signaling looks perfectly healthy. Closing
+   * the signaling socket drives the normal fresh-session reconnect path.
+   */
+  private recoverFromPeerFailure(): void {
+    if (this.phase === 'ended' || this.phase === 'idle') return;
+    this.setStatus('reconnecting', 'Stream failed. Reconnecting securely…');
+    this.closePeer();
+    const socket = this.socket;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+    ) {
+      socket.close(4000, 'peer-failed'); // onclose → handleSocketLost
+    } else {
+      this.handleSocketLost(); // signaling already down: drive reconnect here
+    }
   }
 
   private onFrame(raw: string): void {
@@ -314,7 +338,7 @@ export class ReceiverSession {
       if (state === 'connected') {
         this.setStatus('peer-connected');
       } else if (state === 'failed') {
-        this.setStatus('reconnecting', 'Stream failed. Retrying…');
+        this.recoverFromPeerFailure();
       }
     });
     peer.on('control-open', () => {

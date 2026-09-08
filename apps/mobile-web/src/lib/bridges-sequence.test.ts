@@ -17,8 +17,13 @@ import { TouchBridge } from './touch-bridge.ts';
 const h = vi.hoisted(() => {
   const sentFrames: string[] = [];
   class FakePeerHandle {
+    static instances: FakePeerHandle[] = [];
     private handlers = new Map<string, ((p: unknown) => void)[]>();
     pc = {};
+    closed = false;
+    constructor() {
+      FakePeerHandle.instances.push(this);
+    }
     on(event: string, fn: (p: unknown) => void): () => void {
       const list = this.handlers.get(event) ?? [];
       list.push(fn);
@@ -37,7 +42,9 @@ const h = vi.hoisted(() => {
       sentFrames.push(raw);
       return true;
     }
-    close(): void {}
+    close(): void {
+      this.closed = true;
+    }
   }
   const sockets: FakeWebSocket[] = [];
   class FakeWebSocket {
@@ -49,12 +56,14 @@ const h = vi.hoisted(() => {
     onmessage: ((ev: { data: string }) => void) | null = null;
     onclose: (() => void) | null = null;
     onerror: (() => void) | null = null;
+    closeCalls: { code?: number; reason?: string }[] = [];
     constructor(_url: string) {
       FakeWebSocket.instances.push(this);
     }
     send(_raw: string): void {}
-    close(): void {
+    close(code?: number, reason?: string): void {
       this.readyState = 3;
+      this.closeCalls.push({ code, reason });
     }
   }
   return { sentFrames, FakePeerHandle, FakeWebSocket, sockets };
@@ -132,6 +141,7 @@ describe('phone→laptop sequence space (one owner)', () => {
   beforeEach(() => {
     h.sentFrames.length = 0;
     h.sockets.length = 0;
+    h.FakePeerHandle.instances.length = 0;
     vi.stubGlobal('WebSocket', h.FakeWebSocket);
     localStorage.clear();
   });
@@ -257,5 +267,55 @@ describe('phone→laptop sequence space (one owner)', () => {
     sender.flushNow();
     expect(h.sentFrames).toEqual([]);
     sender.dispose();
+  });
+});
+
+describe('peer-failure recovery (#27)', () => {
+  beforeEach(() => {
+    h.sentFrames.length = 0;
+    h.sockets.length = 0;
+    h.FakePeerHandle.instances.length = 0;
+    vi.stubGlobal('WebSocket', h.FakeWebSocket);
+    localStorage.clear();
+  });
+
+  it('a failed peer connection recycles the whole session, not just the status', async () => {
+    const session = makeLiveSession();
+    const statuses: string[] = [];
+    session.on('status', (s) => statuses.push(s.phase));
+    const peer = h.FakePeerHandle.instances.at(-1);
+    if (!peer) throw new Error('no peer');
+    const socket = h.sockets.at(-1);
+    if (!socket) throw new Error('no socket');
+
+    peer.emit('connectionstate', 'failed');
+
+    // Peer discarded, status flipped, and the signaling socket asked to close.
+    expect(session.currentPhase).toBe('reconnecting');
+    expect(peer.closed).toBe(true);
+    expect(socket.closeCalls.some((c) => c.code === 4000)).toBe(true);
+
+    // A real browser fires onclose after close(); that must schedule a fresh
+    // session (new signaling socket with a hello), not stall in reconnecting.
+    socket.onclose?.();
+    await new Promise((r) => setTimeout(r, 1600));
+    expect(h.sockets.length).toBe(2);
+    expect(session.currentPhase).toBe('connecting');
+    expect(statuses).toContain('reconnecting');
+  });
+
+  it('peer failure with an already-dead signaling socket still schedules a fresh session', async () => {
+    const session = makeLiveSession();
+    const peer = h.FakePeerHandle.instances.at(-1);
+    if (!peer) throw new Error('no peer');
+    const socket = h.sockets.at(-1);
+    if (!socket) throw new Error('no socket');
+    socket.readyState = 3; // signaling died without firing onclose
+
+    peer.emit('connectionstate', 'failed');
+    // handleSocketLost is driven directly; a new session is still scheduled.
+    await new Promise((r) => setTimeout(r, 1600));
+    expect(h.sockets.length).toBe(2);
+    expect(session.currentPhase).toBe('connecting');
   });
 });
