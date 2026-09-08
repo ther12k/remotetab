@@ -78,6 +78,7 @@
       "name": "@remotetab/webrtc",
       "version": "0.1.0",
       "dependencies": {
+        "@remotetab/crypto": "workspace:*",
         "@remotetab/protocol": "workspace:*",
       },
     },

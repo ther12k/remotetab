@@ -40,6 +40,7 @@ export {
   SequenceGuard,
   seqNumber,
   signalingEnvelopeBase,
+  TURN_AUTH_DOMAIN,
   timestampMs,
   toProtocolError,
   unitCoord,

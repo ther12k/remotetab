@@ -3,7 +3,14 @@
  * http(s) origin, requests short-lived credentials bound to this device, and
  * merges them into the ICE server list. Best-effort by design — if the
  * endpoint is unavailable the session still works over STUN/direct.
+ *
+ * Requests are authenticated (#29): the device signs a canonical transcript
+ * with its registered private key so a public deployment cannot be abused as
+ * an open TURN credential mint.
  */
+
+import { bytesToBase64url, encodeTranscript } from '@remotetab/crypto';
+import { TURN_AUTH_DOMAIN } from '@remotetab/protocol';
 
 export type TurnResponse = {
   ttlSeconds: number;
@@ -23,24 +30,54 @@ function httpOriginFromWs(url: string): string | null {
   }
 }
 
+/** Device identity material used to sign the credential request (#29). */
+export type TurnIdentity = {
+  deviceId: string;
+  privateKey: CryptoKey;
+  publicKeySpki: string;
+  publicKeyFingerprint: string;
+};
+
 /**
- * Fetch TURN ICE servers. Returns [] when TURN is unavailable/disabled —
- * callers merge the result with their STUN defaults and proceed.
+ * Fetch TURN ICE servers with a signed, device-bound request. Returns []
+ * when TURN is unavailable/disabled — callers merge the result with their
+ * STUN defaults and proceed.
  */
 export async function fetchTurnIceServers(
   signalingUrl: string,
-  deviceId: string,
+  identity: TurnIdentity,
   timeoutMs = 4000,
 ): Promise<{ urls: string | string[]; username: string; credential: string }[]> {
   const origin = httpOriginFromWs(signalingUrl);
   if (origin === null) return [];
+  const timestamp = Date.now();
+  let signature: string;
+  try {
+    signature = bytesToBase64url(
+      new Uint8Array(
+        await crypto.subtle.sign(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          identity.privateKey,
+          encodeTranscript([TURN_AUTH_DOMAIN, '1', identity.deviceId, String(timestamp)]),
+        ),
+      ),
+    );
+  } catch {
+    return []; // no usable signing key: proceed STUN-only
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${origin}/turn/credentials`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ deviceId }),
+      body: JSON.stringify({
+        deviceId: identity.deviceId,
+        timestamp,
+        publicKeySpki: identity.publicKeySpki,
+        publicKeyFingerprint: identity.publicKeyFingerprint,
+        signature,
+      }),
       signal: controller.signal,
     });
     if (!res.ok) return [];

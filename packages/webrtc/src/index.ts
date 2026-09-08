@@ -10,5 +10,6 @@ export {
   describeSelectedPair,
   fetchTurnIceServers,
   type SelectedPair,
+  type TurnIdentity,
   type TurnResponse,
 } from './turn-client.ts';

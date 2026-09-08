@@ -1,8 +1,14 @@
+import { base64urlToBytes, importPrivateKeyPkcs8 } from '@remotetab/crypto';
 import { DEFAULT_ICE_SERVERS, fetchTurnIceServers } from '@remotetab/webrtc';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PairScreen } from './components/PairScreen.tsx';
 import { Viewer } from './components/Viewer.tsx';
-import { forgetDesktop, listPairedDesktops, type PairedDesktop } from './lib/pairing.ts';
+import {
+  forgetDesktop,
+  listPairedDesktops,
+  loadPhoneKeys,
+  type PairedDesktop,
+} from './lib/pairing.ts';
 import { loadPhoneIdentity } from './lib/phone-identity.ts';
 import { ReceiverSession, type RemoteStatus } from './lib/receiver-session.ts';
 
@@ -64,14 +70,22 @@ export function App() {
       // private mode: code is kept in memory only
     }
     sessionRef.current?.disconnect();
+    // Signed TURN requests (#29) need the device key; the fetch itself runs
+    // lazily when the peer is created — after WS device auth registered us.
+    const keys = await loadPhoneKeys();
+    const priv = await importPrivateKeyPkcs8(base64urlToBytes(keys.privateKeyPkcs8));
     const session = new ReceiverSession({
       url: server.trim(),
       desktopDeviceId: laptopCode,
       identity,
-      iceServers: [
-        ...DEFAULT_ICE_SERVERS,
-        ...(await fetchTurnIceServers(server.trim(), identity.deviceId)),
-      ], // TURN credentials are short-lived and device-bound (#017)
+      iceServers: [...DEFAULT_ICE_SERVERS],
+      turnIceServers: () =>
+        fetchTurnIceServers(server.trim(), {
+          deviceId: identity.deviceId,
+          privateKey: priv,
+          publicKeySpki: keys.publicKeySpki,
+          publicKeyFingerprint: keys.fingerprint,
+        }),
     });
     sessionRef.current = session;
     session.on('status', applyStatus);

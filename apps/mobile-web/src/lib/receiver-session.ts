@@ -77,6 +77,8 @@ export class ReceiverSession {
   >();
   private handshake: PeerAuthHandshake | null = null;
   private controlSender: ControlSender | null = null;
+  /** Offer received before the peer exists (TURN fetch is async, #29). */
+  private pendingOfferSdp: string | null = null;
   private reconnectingSinceMs: number | null = null;
   /** Bounded reconnect window (RECONNECT_TTL_SECONDS, issue #016). */
   private readonly reconnectTtlMs: number;
@@ -87,6 +89,11 @@ export class ReceiverSession {
       desktopDeviceId: string;
       identity: { deviceId: string; displayName: string };
       iceServers: { urls: string | string[] }[];
+      /**
+       * Signed TURN credential fetch (#29) — runs lazily at peer creation,
+       * AFTER WS device auth has registered this phone with the server.
+       */
+      turnIceServers?: () => Promise<{ urls: string | string[] }[]>;
       reconnectTtlMs?: number;
       nowMs?: () => number;
     },
@@ -253,7 +260,7 @@ export class ReceiverSession {
         // One persistent phone→laptop sequence space per session (#014).
         this.controlSender = new ControlSender(this.sessionIdValue);
         this.setStatus('signaling');
-        this.openPeer();
+        void this.openPeerWithTurn();
         return;
       }
       case 'session.rejected': {
@@ -270,18 +277,14 @@ export class ReceiverSession {
         return;
       }
       case 'signal.offer': {
-        if (frame.value.payload.sessionId !== this.sessionIdValue || !this.peer) return;
-        void this.peer
-          .acceptOffer({ type: 'offer', sdp: frame.value.payload.sdp })
-          .then((answer) => {
-            this.send(
-              signalingFrame('signal.answer', {
-                sessionId: this.sessionIdValue ?? '',
-                sdp: answer.sdp ?? '',
-              }),
-            );
-          })
-          .catch(() => this.setStatus('reconnecting', 'Could not start the stream. Retrying…'));
+        if (frame.value.payload.sessionId !== this.sessionIdValue) return;
+        if (!this.peer) {
+          // The peer is still being prepared (async TURN fetch) — hold the
+          // offer and answer as soon as it exists.
+          this.pendingOfferSdp = frame.value.payload.sdp;
+          return;
+        }
+        this.acceptOfferNow(frame.value.payload.sdp);
         return;
       }
       case 'signal.ice': {
@@ -331,9 +334,42 @@ export class ReceiverSession {
     }
   }
 
-  private openPeer(): void {
+  /** Prepare ICE (async TURN) then build the peer; answer any held offer. */
+  private async openPeerWithTurn(): Promise<void> {
+    let servers = this.opts.iceServers;
+    if (this.opts.turnIceServers) {
+      try {
+        const turn = await this.opts.turnIceServers();
+        if (turn.length > 0) servers = [...servers, ...turn];
+      } catch {
+        // Best-effort: STUN/direct still works without TURN (#017).
+      }
+    }
+    this.openPeer(servers);
+    const pending = this.pendingOfferSdp;
+    this.pendingOfferSdp = null;
+    if (pending !== null) this.acceptOfferNow(pending);
+  }
+
+  private acceptOfferNow(sdp: string): void {
+    const peer = this.peer;
+    if (!peer) return;
+    void peer
+      .acceptOffer({ type: 'offer', sdp })
+      .then((answer) => {
+        this.send(
+          signalingFrame('signal.answer', {
+            sessionId: this.sessionIdValue ?? '',
+            sdp: answer.sdp ?? '',
+          }),
+        );
+      })
+      .catch(() => this.setStatus('reconnecting', 'Could not start the stream. Retrying…'));
+  }
+
+  private openPeer(iceServers: { urls: string | string[] }[]): void {
     this.closePeer();
-    const peer = new RTCPeerHandle('receiver', { iceServers: this.opts.iceServers });
+    const peer = new RTCPeerHandle('receiver', { iceServers });
     this.peer = peer;
     peer.on('track', (track) => {
       for (const handler of this.trackListeners) handler(track);
@@ -584,6 +620,7 @@ export class ReceiverSession {
     this.stopPings();
     this.handshake = null;
     this.controlSender = null;
+    this.pendingOfferSdp = null;
     this.reconnectingSinceMs = null;
     this.closePeer();
     this.sessionIdValue = null;
