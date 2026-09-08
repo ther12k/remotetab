@@ -3,8 +3,17 @@
 ## 0.1.0-alpha.1 validation script (MVP gate — do this FIRST)
 
 Everything below the line is beta evidence (P2 work). This section is the
-only thing gating 0.1.0-alpha.1. Follow the flow top to bottom and record
-what actually happened — every failure is a P0 fix, not a discussion.
+only thing gating 0.1.0-alpha.1.
+
+Run rules:
+
+- Run the 10 steps STRAIGHT THROUGH, start to finish. Do not fix anything
+  mid-run and do not improvise debugging.
+- Stop at the FIRST failure and fill ONE report from
+  docs/VALIDATION_REPORT_TEMPLATE.md (commit, Chrome, states, repro). That
+  report — not a fix attempt — is the run's output.
+- Only after the report is captured, diagnose (the template includes the
+  "tap doesn't work" differential ordering).
 
 Setup:
 
@@ -18,6 +27,16 @@ bun run dev:mobile           # terminal 2 — note the LAN URL printed by Vite
 Load unpacked `apps/extension/.output/chrome-mv3` in Chrome; open the PWA on
 the phone at the LAN URL; pair once via the popup QR.
 
+Alpha debug instrumentation (enable for every validation run):
+
+- Phone: open the PWA with `?debug` in the URL (or set
+  `localStorage.remotetab.debugCoords = '1'`). A green chip shows the last
+  tap's normalized coordinates — `tap 0.53, 0.81` — or `tap REJECTED` when
+  the touch landed in the letterbox, plus `video WxH → target WxH`.
+- Laptop: in the service-worker console set the log level to **Verbose**;
+  every tap logs `[remotetab] pointer.down remote coordinate x=763 y=729
+  (viewport 1440×900, from 0.530,0.810)`.
+
 Environment: Chrome ____, laptop OS ____, phone ____, Android/iOS ____.
 
 The flow:
@@ -27,9 +46,18 @@ The flow:
 3. [ ] Phone connects (laptop code or existing pair).
 4. [ ] Video appears on the phone — the REAL tab, live.
 5. [ ] Tap works: tap the ChatGPT composer, focus lands in the real tab.
+       Coordinate check (do once while here): tap the VISUAL CENTER of a
+       large element; the phone chip should read ~0.50, 0.50 and the laptop
+       verbose line should land near the center of the target. A consistent
+       offset = mapping bug (report it — see template classes A/F/G).
 6. [ ] Scroll works: scroll mode moves the page without accidental clicks.
-7. [ ] Keyboard works: type a message via the bridge — exact text lands in
-       the composer.
+7. [ ] Keyboard works — STAGED, in exactly this order (virtual keyboards
+       reshape the layout; each stage isolates one failure):
+       a. focus the remote composer with a tap
+       b. open the keyboard bridge, send `abc` — exact text lands
+       c. Backspace once — `ab` remains
+       d. send `def` — composer shows `abcdef`
+       e. only then try a real prompt
 8. [ ] Enter works: send the prompt from the phone.
 9. [ ] ChatGPT response becomes visible in the phone video (pixels only).
 10. [ ] Disconnect works: Stop on the laptop OR Disconnect on the phone.
@@ -43,14 +71,35 @@ The seven gate blockers (RELEASE.md):
       (first tap after pairing must NOT kill the session; watch the
       service-worker console)
 - [ ] G5 simple reconnect: drop phone Wi-Fi 5–15 s → input pauses →
-      fresh session → control resumes
-- [ ] G6 Stop Remote detaches the debugger (orange bar gone) + capture stops
-      (chrome://media-internals) + keep-awake released
+      fresh session → control resumes. Alpha bar is LOW: 2–5 s with a
+      "Reconnecting" notice is fine; seamless frame continuity, instant
+      ICE restart, and multi-path failover are NOT required yet.
+- [ ] G6 Stop Remote is CLEAN — all six:
+      - video frozen/disconnected on the phone
+      - DataChannel closed (chrome://webrtc-internals counters stop)
+      - RTCPeerConnection closed
+      - debugger orange indicator GONE from the tab
+      - capture stopped (chrome://media-internals shows the stream gone)
+      - system keep-awake released
+      A dirty stop poisons the NEXT session with false bugs (debugger
+      conflict, stale stream) — treat any residue here as P0.
 - [ ] G7 ChatGPT login/cookies only on the laptop; RemoteTab logs/traffic
       contain no credentials, no cookies, no scraped output
 
-Result: ____ (all green → 0.1.0-alpha.1 ships to 2–5 people; any red → file
-the failure as a P0 issue with the step number).
+Result: ____ (all green → tag v0.1.0-alpha.1 — do NOT add polish first; any
+red → the report becomes the single most important work item in the repo).
+
+## After the first green run: tag, then hand to 2–5 people
+
+1. Tag `v0.1.0-alpha.1` on the commit that passed.
+2. Give testers ONE instruction, verbatim:
+   "Coba lanjutkan percakapan ChatGPT dari HP dan kasih tahu bagian yang
+   terasa rusak atau menyebalkan."
+   Do NOT hand them a feature checklist — we want their unprompted
+   annoyances ("scroll-nya aneh", "keyboard nutup layar", "susah klik
+   textbox", "disconnect setelah layar HP mati", "text terasa telat").
+3. Record their reports verbatim in this file; each becomes a P1 item
+   ranked by how many people hit it.
 
 ---
 

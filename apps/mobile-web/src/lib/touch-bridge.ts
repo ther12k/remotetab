@@ -29,6 +29,13 @@ export class TouchBridge {
       /** Pixels of finger travel mapped to one wheel notch step. */
       wheelScale?: number;
       timers?: SenderTimers;
+      /**
+       * Alpha debug instrumentation (not a production feature): reports the
+       * normalized tap actually computed for each pointerdown/up — null means
+       * the touch was rejected as letterbox/out-of-bounds. Feeds the
+       * coordinate-mapping overlay used during hardware validation.
+       */
+      onDebugTap?: (point: { x: number; y: number } | null, phase: 'down' | 'up') => void;
     },
   ) {
     this.classifier = new GestureClassifier(opts.mode ?? 'pointer');
@@ -98,6 +105,7 @@ export class TouchBridge {
   private onDown(ev: PointerEvent): void {
     if (!this.active) return;
     const point = this.clientToVideoPoint(ev);
+    this.opts.onDebugTap?.(point, 'down');
     if (point === null) {
       this.classifier.reset();
       return;
@@ -134,6 +142,7 @@ export class TouchBridge {
   private onUp(ev: PointerEvent): void {
     if (!this.active) return;
     const point = this.clientToVideoPoint(ev);
+    this.opts.onDebugTap?.(point, 'up');
     if (point === null) return;
     const gesture = this.classifier.up(point);
     if (gesture === null) return;
