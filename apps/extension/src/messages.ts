@@ -55,6 +55,7 @@ export function isPopupRequest(value: unknown): value is PopupRequest {
     case 'pairStart':
     case 'pairCancel':
     case 'pairedList':
+      return true;
     case 'revokeDevice':
       return typeof v.deviceId === 'string' && v.deviceId.length >= 8;
     default:
