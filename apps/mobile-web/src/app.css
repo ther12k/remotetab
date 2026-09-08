@@ -256,3 +256,20 @@ button.ghost {
   border: none;
   color: var(--muted);
 }
+
+/* Alpha debug instrumentation — coordinate mapping overlay (?debug). */
+.debug-overlay {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 5;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #7ce38b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  user-select: none;
+}

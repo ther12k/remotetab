@@ -114,10 +114,18 @@ export class CdpInputAdapter implements RemoteInputAdapter {
   async pointerDown(input: NormalizedPointerButton): Promise<void> {
     const { width, height } = await this.getViewport();
     const button = input.button;
+    const x = clamp(input.x * width, width);
+    const y = clamp(input.y * height, height);
+    // Alpha debug instrumentation: verbose-level only (invisible unless the
+    // SW console is set to Verbose). Coordinates and viewport dims only —
+    // never page content. Compare against the phone's "tap x,y" overlay.
+    console.debug(
+      `[remotetab] pointer.down remote coordinate x=${Math.round(x)} y=${Math.round(y)} (viewport ${width}×${height}, from ${input.x.toFixed(3)},${input.y.toFixed(3)})`,
+    );
     await this.send('Input.dispatchMouseEvent', {
       type: 'mousePressed',
-      x: clamp(input.x * width, width),
-      y: clamp(input.y * height, height),
+      x,
+      y,
       button,
       buttons: buttonBit(button),
       clickCount: input.clickCount,
@@ -127,10 +135,15 @@ export class CdpInputAdapter implements RemoteInputAdapter {
   async pointerUp(input: NormalizedPointerButton): Promise<void> {
     const { width, height } = await this.getViewport();
     const button = input.button;
+    const x = clamp(input.x * width, width);
+    const y = clamp(input.y * height, height);
+    console.debug(
+      `[remotetab] pointer.up remote coordinate x=${Math.round(x)} y=${Math.round(y)} (viewport ${width}×${height})`,
+    );
     await this.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
-      x: clamp(input.x * width, width),
-      y: clamp(input.y * height, height),
+      x,
+      y,
       button,
       buttons: 0,
       clickCount: input.clickCount,

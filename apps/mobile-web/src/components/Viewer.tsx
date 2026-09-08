@@ -24,6 +24,36 @@ export function Viewer(props: {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [diag, setDiag] = useState<{ transport: string; rttMs: number | null } | null>(null);
 
+  // Alpha debug instrumentation (opt-in, never a production feature): shows
+  // the normalized coordinates the phone actually computed for the last tap
+  // plus the mapping inputs, so hardware validation can compare phone
+  // "tap x,y" against the laptop's "remote coordinate" console line.
+  const debugCoords = useMemo(() => {
+    try {
+      return (
+        new URLSearchParams(window.location.search).has('debug') ||
+        localStorage.getItem('remotetab.debugCoords') === '1'
+      );
+    } catch {
+      return false;
+    }
+  }, []);
+  const [debugTap, setDebugTap] = useState<{
+    point: { x: number; y: number } | null;
+    phase: 'down' | 'up';
+  } | null>(null);
+  const [targetViewport, setTargetViewport] = useState<{
+    cssWidth: number;
+    cssHeight: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!session) return;
+    return session.on('viewport', (v) =>
+      setTargetViewport({ cssWidth: v.cssWidth, cssHeight: v.cssHeight }),
+    );
+  }, [session]);
+
   // One shared sender keeps touch + keyboard frames ordered end-to-end.
   // Wheel frames encode through the session's persistent sequence owner (#22).
   const sender = useMemo(() => {
@@ -60,6 +90,7 @@ export function Viewer(props: {
       session,
       mode,
       sender: sender ?? undefined,
+      onDebugTap: debugCoords ? (point, phase) => setDebugTap({ point, phase }) : undefined,
     });
     bridgeRef.current = bridge;
     bridge.setChannelOpen(controlOpen);
@@ -68,7 +99,7 @@ export function Viewer(props: {
       dispose();
       bridgeRef.current = null;
     };
-  }, [session, mode, controlOpen, sender]);
+  }, [session, mode, controlOpen, sender, debugCoords]);
 
   // Poll connection diagnostics (safe snapshot: no prompt/page content).
   useEffect(() => {
@@ -119,6 +150,18 @@ export function Viewer(props: {
 
       <div className="video-wrap" ref={wrapRef}>
         <video ref={videoRef} playsInline autoPlay muted className="remote-video" />
+        {debugCoords && (
+          <div className="debug-overlay" aria-hidden="true">
+            {debugTap === null
+              ? 'tap …'
+              : debugTap.point === null
+                ? `tap REJECTED (${debugTap.phase} in letterbox/out-of-bounds)`
+                : `tap ${debugTap.point.x.toFixed(2)}, ${debugTap.point.y.toFixed(2)} (${debugTap.phase})`}
+            {' · '}
+            video {trackInfo ? `${trackInfo.w}×${trackInfo.h}` : '…'} →{' '}
+            {targetViewport ? `${targetViewport.cssWidth}×${targetViewport.cssHeight}` : '…'}
+          </div>
+        )}
         {status.phase === 'reconnecting' && (
           <div className="overlay">
             <p>{status.message ?? 'Reconnecting…'}</p>
