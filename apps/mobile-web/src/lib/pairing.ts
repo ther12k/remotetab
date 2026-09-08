@@ -5,6 +5,7 @@
  */
 
 import {
+  base64urlToBytes,
   bytesToBase64url,
   decodePairingPayload,
   exportPrivateKeyPkcs8,
@@ -24,11 +25,22 @@ export { decodePairingPayload };
 
 const KEYSTORE_KEY = 'remotetab.phone.keys';
 const DESKTOPS_KEY = 'remotetab.phone.desktops';
+const IDB_NAME = 'remotetab-identity';
+const IDB_STORE = 'keys';
+const IDB_ENTRY = 'device';
 
+/**
+ * The phone signing identity (audit issue #30): the private key lives as a
+ * NON-extractable CryptoKey in IndexedDB. It can sign challenges for as long
+ * as the origin is trusted, but its bytes can never be exported again — web
+ * storage compromise no longer yields the long-term secret. If IndexedDB is
+ * unavailable the identity is session-scoped (in memory) rather than
+ * persisted in an exportable form.
+ */
 export type PhoneKeyIdentity = {
   deviceId: string;
   displayName: string;
-  privateKeyPkcs8: string;
+  privateKey: CryptoKey;
   publicKeySpki: string;
   fingerprint: string;
 };
@@ -41,39 +53,124 @@ export type PairedDesktop = {
   pairedAtMs: number;
 };
 
-export async function loadPhoneKeys(): Promise<PhoneKeyIdentity> {
-  return loadOrCreatePhoneKeys();
+type StoredKeyRecord = {
+  deviceId: string;
+  displayName: string;
+  publicKeySpki: string;
+  fingerprint: string;
+  privateKey: CryptoKey;
+};
+
+function openIdentityDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('indexedDB unavailable'));
+      return;
+    }
+    const open = indexedDB.open(IDB_NAME, 1);
+    open.onupgradeneeded = () => {
+      if (open.result.objectStoreNames.contains(IDB_STORE)) return;
+      open.result.createObjectStore(IDB_STORE);
+    };
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error ?? new Error('indexedDB open failed'));
+  });
 }
 
-async function loadOrCreatePhoneKeys(): Promise<PhoneKeyIdentity> {
+function idbGet(db: IDBDatabase): Promise<StoredKeyRecord | undefined> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).get(IDB_ENTRY);
+    req.onsuccess = () => resolve(req.result as StoredKeyRecord | undefined);
+    req.onerror = () => reject(req.error ?? new Error('indexedDB get failed'));
+  });
+}
+
+function idbPut(db: IDBDatabase, record: StoredKeyRecord): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put(record, IDB_ENTRY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('indexedDB put failed'));
+  });
+}
+
+let memoryIdentity: PhoneKeyIdentity | null = null;
+
+export async function loadPhoneKeys(): Promise<PhoneKeyIdentity> {
+  if (memoryIdentity) return memoryIdentity;
   const base = loadPhoneIdentity();
   try {
-    const raw = localStorage.getItem(KEYSTORE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<PhoneKeyIdentity>;
-      if (typeof parsed.privateKeyPkcs8 === 'string' && typeof parsed.publicKeySpki === 'string') {
-        return {
-          deviceId: base.deviceId,
-          displayName: base.displayName,
-          privateKeyPkcs8: parsed.privateKeyPkcs8,
-          publicKeySpki: parsed.publicKeySpki,
-          fingerprint: parsed.fingerprint ?? '',
+    const db = await openIdentityDb();
+    const stored = await idbGet(db);
+    if (stored) {
+      memoryIdentity = {
+        deviceId: stored.deviceId,
+        displayName: stored.displayName,
+        privateKey: stored.privateKey,
+        publicKeySpki: stored.publicKeySpki,
+        fingerprint: stored.fingerprint,
+      };
+      return memoryIdentity;
+    }
+    // Legacy alpha keystores held exportable PKCS#8 in localStorage; upgrade
+    // them to a non-extractable key and remove the exportable copy.
+    const legacy = localStorage.getItem(KEYSTORE_KEY);
+    let upgraded: PhoneKeyIdentity | null = null;
+    if (legacy) {
+      try {
+        const parsed = JSON.parse(legacy) as {
+          privateKeyPkcs8?: string;
+          publicKeySpki?: string;
+          fingerprint?: string;
         };
+        if (
+          typeof parsed.privateKeyPkcs8 === 'string' &&
+          typeof parsed.publicKeySpki === 'string'
+        ) {
+          const privateKey = await importPrivateKeyPkcs8(
+            base64urlToBytes(parsed.privateKeyPkcs8),
+            false,
+          );
+          upgraded = {
+            deviceId: base.deviceId,
+            displayName: base.displayName,
+            privateKey,
+            publicKeySpki: parsed.publicKeySpki,
+            fingerprint: parsed.fingerprint ?? '',
+          };
+        }
+      } catch {
+        // Corrupt legacy entry: fall through and mint fresh keys.
       }
     }
+    const identity = upgraded ?? (await mintPhoneIdentity(base));
+    await idbPut(db, { ...identity });
+    if (legacy) localStorage.removeItem(KEYSTORE_KEY);
+    memoryIdentity = identity;
+    return memoryIdentity;
   } catch {
-    // fall through and mint keys
+    // No IndexedDB: keep the identity in memory only (session-scoped).
+    memoryIdentity ??= await mintPhoneIdentity(base);
+    return memoryIdentity;
   }
+}
+
+/** Generate a fresh identity; only the pkcs8 bytes ever exist, transiently. */
+async function mintPhoneIdentity(base: {
+  deviceId: string;
+  displayName: string;
+}): Promise<PhoneKeyIdentity> {
   const pair = await generateSigningKeyPair();
-  const identity: PhoneKeyIdentity = {
+  const pkcs8 = await exportPrivateKeyPkcs8(pair.privateKey);
+  const privateKey = await importPrivateKeyPkcs8(pkcs8, false);
+  return {
     deviceId: base.deviceId,
     displayName: base.displayName,
-    privateKeyPkcs8: bytesToBase64url(await exportPrivateKeyPkcs8(pair.privateKey)),
+    privateKey,
     publicKeySpki: bytesToBase64url(await exportPublicKeySpki(pair.publicKey)),
     fingerprint: await keyFingerprint(pair.publicKey),
   };
-  localStorage.setItem(KEYSTORE_KEY, JSON.stringify(identity));
-  return identity;
 }
 
 export async function listPairedDesktops(): Promise<PairedDesktop[]> {
@@ -108,7 +205,7 @@ export async function buildPairJoin(payload: PairingPayloadV1): Promise<{
   publicKeyFingerprint: string;
   pairingProof: string;
 }> {
-  const phone = await loadOrCreatePhoneKeys();
+  const phone = await loadPhoneKeys();
   const proof = await pairingProof(payload.secret, {
     protocolVersion: '1',
     desktopDeviceId: payload.desktopDeviceId,
@@ -207,7 +304,7 @@ export class PairingSession {
     const socket = new WebSocket(this.opts.payload.signalingOrigin || this.opts.url);
     this.socket = socket;
     socket.onopen = async () => {
-      const phone = await loadOrCreatePhoneKeys();
+      const phone = await loadPhoneKeys();
       socket.send(
         JSON.stringify({
           v: 1,
