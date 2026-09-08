@@ -25,7 +25,12 @@ import {
   signalIceSchema,
   signalingFrame,
 } from '@remotetab/protocol';
-import { DEFAULT_ICE_SERVERS, fetchTurnIceServers, toIceServers } from '@remotetab/webrtc';
+import {
+  DEFAULT_ICE_SERVERS,
+  fetchTurnIceServers,
+  type TurnIdentity,
+  toIceServers,
+} from '@remotetab/webrtc';
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { CdpInputAdapter } from '@/cdp-input.ts';
@@ -203,10 +208,19 @@ export default defineBackground(() => {
   // Signaling session flow (#007) + pairing (#013)
   // -------------------------------------------------------------------------
 
-  /** STUN defaults + best-effort short-lived TURN credentials (#017). */
-  async function collectIceServers(iceUrls: string[], signalingUrl: string, deviceId: string) {
+  /**
+   * STUN defaults + best-effort short-lived TURN credentials (#017). The
+   * signed request (#29) only succeeds once this device is registered, so
+   * this runs lazily per session — not before signaling auth.
+   */
+  async function collectIceServers(
+    iceUrls: string[],
+    signalingUrl: string,
+    turnIdentity: TurnIdentity | null,
+  ): Promise<RTCIceServer[]> {
     const stunOnly = iceUrls.length > 0 ? toIceServers(iceUrls) : DEFAULT_ICE_SERVERS;
-    const turn = await fetchTurnIceServers(signalingUrl, deviceId);
+    if (turnIdentity === null) return stunOnly;
+    const turn = await fetchTurnIceServers(signalingUrl, turnIdentity);
     return turn.length > 0 ? [...stunOnly, ...turn] : stunOnly;
   }
 
@@ -225,14 +239,19 @@ export default defineBackground(() => {
 
   async function startSignaling(): Promise<void> {
     const [settings, identity] = await Promise.all([settingsStore.load(), identityPromise]);
-    const servers = await collectIceServers(
-      settings.iceUrls,
-      settings.signalingUrl,
-      identity.deviceId,
-    );
     void getPairing(identity);
 
     const priv = await deviceStore.importPrivateKey(identity);
+    const turnIdentity: TurnIdentity = {
+      deviceId: identity.deviceId,
+      privateKey: priv,
+      publicKeySpki: identity.publicKeySpki,
+      publicKeyFingerprint: identity.fingerprint,
+    };
+    // Fresh short-lived TURN credentials per session, minted AFTER device
+    // authentication has registered this desktop (#29).
+    const getIceServers = (): Promise<RTCIceServer[]> =>
+      collectIceServers(settings.iceUrls, settings.signalingUrl, turnIdentity);
     const WS_SIGN = { name: 'ECDSA', hash: 'SHA-256' } as const;
     signaling?.close();
     const client = new SignalingClient({
@@ -258,7 +277,7 @@ export default defineBackground(() => {
         signalingState = state;
         void updateSignalingPhase(state);
       },
-      onFrame: (frame) => void handleSignalingFrame(frame, identity.deviceId, servers),
+      onFrame: (frame) => void handleSignalingFrame(frame, identity.deviceId, getIceServers),
     });
     signaling = client;
     client.connect();
@@ -292,7 +311,7 @@ export default defineBackground(() => {
   async function handleSignalingFrame(
     frame: SignalingMessage,
     desktopDeviceId: string,
-    servers: RTCIceServer[],
+    getIceServers: () => Promise<RTCIceServer[]>,
   ): Promise<void> {
     const state = await store.load();
     const identity = await identityPromise;
@@ -329,6 +348,7 @@ export default defineBackground(() => {
         activePhoneDeviceId = req.deviceId;
         await store.save(transition(state, { type: 'peer-connected', nowMs: Date.now() }));
         signaling?.send(signalingFrame('session.accepted', accepted));
+        const servers = await getIceServers();
         await sendToOffscreen(
           { type: 'sender:startSession', sessionId, iceServers: servers },
           8000,

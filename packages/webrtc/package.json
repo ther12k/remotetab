@@ -10,6 +10,7 @@
     "build": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@remotetab/crypto": "workspace:*",
     "@remotetab/protocol": "workspace:*"
   }
 }

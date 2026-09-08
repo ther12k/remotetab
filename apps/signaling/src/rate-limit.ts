@@ -22,3 +22,30 @@ export class FrameRateLimiter {
     return true;
   }
 }
+
+/**
+ * Fixed-window rate limiter keyed by device id (#29): bounds TURN credential
+ * issuance per device. Only registered device ids reach this limiter, so the
+ * key space is bounded by enrollment.
+ */
+export class DeviceRateLimiter {
+  private readonly windows = new Map<string, { start: number; count: number }>();
+
+  constructor(
+    private readonly maxPerWindow: number,
+    private readonly windowMs: number,
+    private readonly maxKeys = 10_000,
+  ) {}
+
+  /** Record one request for `key` at `nowMs`; false when over the limit. */
+  allow(key: string, nowMs: number): boolean {
+    const window = this.windows.get(key);
+    if (window === undefined || nowMs - window.start >= this.windowMs) {
+      if (this.windows.size >= this.maxKeys) this.windows.clear();
+      this.windows.set(key, { start: nowMs, count: 1 });
+      return true;
+    }
+    window.count += 1;
+    return window.count <= this.maxPerWindow;
+  }
+}

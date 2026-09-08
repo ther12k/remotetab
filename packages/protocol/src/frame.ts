@@ -5,6 +5,9 @@ import { ProtocolError } from './protocol-error.ts';
 /** Domain separator for the signaling WS device-auth transcript (#018). */
 export const WS_AUTH_DOMAIN = 'remotetab.v1.ws-auth';
 
+/** Domain separator for the signed TURN credential request transcript (#29). */
+export const TURN_AUTH_DOMAIN = 'remotetab.v1.turn-auth';
+
 /**
  * Shared wire primitives. Every object schema in this package is strict:
  * unknown keys are rejected so undeclared fields can never smuggle behavior.

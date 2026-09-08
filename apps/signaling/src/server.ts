@@ -10,10 +10,16 @@ import { Hono } from 'hono';
 import { createDeviceRegistry, type DeviceRegistry, type EnrollResult } from './device-registry.ts';
 import type { Env } from './env.ts';
 import type { Logger } from './logger.ts';
-import { FrameRateLimiter } from './rate-limit.ts';
+import { DeviceRateLimiter, FrameRateLimiter } from './rate-limit.ts';
 import { ConnectionRegistry, MemoryPairingRepo, MemorySessionRepo } from './registry.ts';
 import { SignalingRouter, WS_CLOSE_PROTOCOL_ERROR } from './router.ts';
-import { isValidTurnDeviceId, mintTurnCredentials, turnIceServer } from './turn.ts';
+import {
+  isTurnAuthRequest,
+  isValidTurnDeviceId,
+  mintTurnCredentials,
+  turnIceServer,
+  verifyTurnAuthRequest,
+} from './turn.ts';
 
 const HEARTBEAT_TIMEOUT_SEC = 45;
 /** Per-connection signaling frame budget. */
@@ -122,15 +128,34 @@ export function startServer(
     return c.json({ error: 'identity_conflict' }, 409);
   });
 
-  // Short-lived TURN credentials (issue #017). Disabled unless TURN_SECRET is
-  // configured. The shared secret never leaves this process.
+  // Short-lived TURN credentials (#017), authenticated (#29): the client
+  // proves possession of its REGISTERED device key; unknown, revoked, or
+  // identity-mismatching devices are refused, and issuance is rate limited
+  // per device. The shared secret never leaves this process.
+  const turnLimiter = new DeviceRateLimiter(12, 600_000);
   app.post('/turn/credentials', async (c) => {
     if (ctx.env.turnSecret === '' || ctx.env.turnUrls.length === 0) {
       return c.json({ error: 'turn_disabled' }, 404);
     }
-    const body = (await c.req.json().catch(() => ({}))) as { deviceId?: unknown };
-    if (!isValidTurnDeviceId(body.deviceId)) {
-      return c.json({ error: 'invalid_device_id' }, 400);
+    const body = (await c.req.json().catch(() => ({}))) as unknown;
+    if (!isTurnAuthRequest(body)) {
+      return c.json({ error: 'invalid_request' }, 400);
+    }
+    const device = devices.get(body.deviceId);
+    if (!device) return c.json({ error: 'unregistered_device' }, 403);
+    if (device.revokedAtMs !== undefined) return c.json({ error: 'device_revoked' }, 403);
+    if (
+      device.publicKeySpki !== body.publicKeySpki ||
+      device.fingerprint !== body.publicKeyFingerprint
+    ) {
+      return c.json({ error: 'identity_mismatch' }, 403);
+    }
+    if (!turnLimiter.allow(body.deviceId, Date.now())) {
+      return c.json({ error: 'rate_limited' }, 429);
+    }
+    const verdict = await verifyTurnAuthRequest(body, Date.now());
+    if (verdict !== 'ok') {
+      return c.json({ error: `rejected_${verdict}` }, 401);
     }
     const cred = await mintTurnCredentials({
       secret: ctx.env.turnSecret,
