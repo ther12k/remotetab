@@ -240,23 +240,38 @@ export class SignalingRouter {
     if (!ok) {
       return this.authFailure(conn, deviceId, 'invalid signature');
     }
-    const alreadyKnown = this.deps.devices.get(deviceId) !== undefined;
-    this.deps.devices.register(
-      deviceId,
-      proof.publicKeySpki,
-      proof.publicKeyFingerprint,
-      proof.displayName,
-    );
+    // Identity continuity (#24/#25): a known deviceId must present exactly
+    // its registered key; unknown devices enroll only in open mode.
+    const known = this.deps.devices.get(deviceId);
+    if (known) {
+      if (
+        known.publicKeySpki !== proof.publicKeySpki ||
+        known.fingerprint !== proof.publicKeyFingerprint
+      ) {
+        this.deps.log.warn('device.key_conflict', { connId: conn.connId, deviceId });
+        return this.authFailure(conn, deviceId, 'key does not match the registered identity');
+      }
+    } else if (this.deps.deviceAuthMode === 'required') {
+      this.deps.log.warn('device.enrollment_closed', { connId: conn.connId, deviceId });
+      return this.authFailure(conn, deviceId, 'device not registered');
+    } else {
+      this.deps.devices.enroll(
+        deviceId,
+        proof.publicKeySpki,
+        proof.publicKeyFingerprint,
+        proof.displayName,
+      );
+    }
     this.pendingAuth.delete(conn.connId);
     this.authenticated.add(conn.connId);
     this.deps.log.info('device.authenticated', {
       connId: conn.connId,
       deviceId,
-      registered: !alreadyKnown,
+      registered: known === undefined,
     });
     conn.send(
       JSON.stringify(
-        signalingFrame('auth.ok', { registered: !alreadyKnown }, { replyTo: frame.id }),
+        signalingFrame('auth.ok', { registered: known === undefined }, { replyTo: frame.id }),
       ),
     );
     return OK;
@@ -481,17 +496,7 @@ export class SignalingRouter {
       this.sendError(conn, 'MESSAGE_INVALID', 'session.request requires phone role');
       return FATAL(WS_CLOSE_POLICY);
     }
-    if (
-      this.deps.devices.isRevoked(reg.deviceId) ||
-      this.deps.devices.isRevoked(frame.payload.desktopDeviceId)
-    ) {
-      this.sendError(conn, 'DEVICE_REVOKED', undefined, frame.id);
-      return OK;
-    }
-    if (
-      this.deps.devices.isRevoked(reg.deviceId) ||
-      this.deps.devices.isRevoked(frame.payload.desktopDeviceId)
-    ) {
+    if (this.deps.devices.isRevoked(reg.deviceId) || this.deps.devices.isRevoked(frame.payload.desktopDeviceId)) {
       this.sendError(conn, 'DEVICE_REVOKED', undefined, frame.id);
       return OK;
     }
