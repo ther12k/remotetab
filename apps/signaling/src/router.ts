@@ -16,6 +16,7 @@ import {
   base64urlToBytes,
   bytesToBase64url,
   encodeTranscript,
+  fingerprintFromSpkiB64,
   importPublicKeySpki,
 } from '@remotetab/crypto';
 import {
@@ -70,11 +71,6 @@ type SessionRequest = {
   phoneConnId: string;
   frame: Extract<SignalingMessage, { type: 'session.request' }>;
 };
-
-async function sha256Fingerprint(spkiB64: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', base64urlToBytes(spkiB64)));
-  return bytesToBase64url(digest.slice(0, 16));
-}
 
 export class SignalingRouter {
   private readonly handles = new Map<string, SignalingConnection>();
@@ -220,7 +216,7 @@ export class SignalingRouter {
     const deviceId = reg.deviceId;
     const proof = frame.payload;
     // The claimed fingerprint must match the presented key.
-    const fp = await sha256Fingerprint(proof.publicKeySpki);
+    const fp = await fingerprintFromSpkiB64(proof.publicKeySpki);
     if (fp !== proof.publicKeyFingerprint) {
       return this.authFailure(conn, deviceId, 'fingerprint mismatch');
     }

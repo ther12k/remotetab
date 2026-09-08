@@ -16,6 +16,7 @@ export {
 export {
   exportPrivateKeyPkcs8,
   exportPublicKeySpki,
+  fingerprintFromSpkiB64,
   generateSigningKeyPair,
   importPrivateKeyPkcs8,
   importPublicKeySpki,
