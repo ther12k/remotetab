@@ -188,7 +188,11 @@ export class ReceiverSession {
           this.reconnectTtlMs,
         )
       ) {
-        this.setStatus('ended', 'Could not reconnect within the time window. Connect again.', 'error');
+        this.setStatus(
+          'ended',
+          'Could not reconnect within the time window. Connect again.',
+          'error',
+        );
         this.cleanup();
         return;
       }
