@@ -1,5 +1,61 @@
 # Manual Evidence Log
 
+## 0.1.0-alpha.1 validation script (MVP gate — do this FIRST)
+
+Everything below the line is beta evidence (P2 work). This section is the
+only thing gating 0.1.0-alpha.1. Follow the flow top to bottom and record
+what actually happened — every failure is a P0 fix, not a discussion.
+
+Setup:
+
+```sh
+bun install
+bun run build:extension      # apps/extension/.output/chrome-mv3
+bun run dev:signaling        # terminal 1 (default ws://localhost:8787/ws)
+bun run dev:mobile           # terminal 2 — note the LAN URL printed by Vite
+```
+
+Load unpacked `apps/extension/.output/chrome-mv3` in Chrome; open the PWA on
+the phone at the LAN URL; pair once via the popup QR.
+
+Environment: Chrome ____, laptop OS ____, phone ____, Android/iOS ____.
+
+The flow:
+
+1. [ ] Extension loads; popup shows the current tab (sanitized origin only).
+2. [ ] Click **Enable Remote** on the ChatGPT tab.
+3. [ ] Phone connects (laptop code or existing pair).
+4. [ ] Video appears on the phone — the REAL tab, live.
+5. [ ] Tap works: tap the ChatGPT composer, focus lands in the real tab.
+6. [ ] Scroll works: scroll mode moves the page without accidental clicks.
+7. [ ] Keyboard works: type a message via the bridge — exact text lands in
+       the composer.
+8. [ ] Enter works: send the prompt from the phone.
+9. [ ] ChatGPT response becomes visible in the phone video (pixels only).
+10. [ ] Disconnect works: Stop on the laptop OR Disconnect on the phone.
+
+The seven gate blockers (RELEASE.md):
+
+- [ ] G1 extension captures a real tab
+- [ ] G2 phone receives the stream
+- [ ] G3 tap/scroll/keyboard really work
+- [ ] G4 whole session on one sequence space — ZERO REPLAY_REJECTED
+      (first tap after pairing must NOT kill the session; watch the
+      service-worker console)
+- [ ] G5 simple reconnect: drop phone Wi-Fi 5–15 s → input pauses →
+      fresh session → control resumes
+- [ ] G6 Stop Remote detaches the debugger (orange bar gone) + capture stops
+      (chrome://media-internals) + keep-awake released
+- [ ] G7 ChatGPT login/cookies only on the laptop; RemoteTab logs/traffic
+      contain no credentials, no cookies, no scraped output
+
+Result: ____ (all green → 0.1.0-alpha.1 ships to 2–5 people; any red → file
+the failure as a P0 issue with the step number).
+
+---
+
+# Beta evidence (P2 — record as worked)
+
 Some acceptance criteria require a real Chrome install / real phone and
 cannot be evidenced by CI. Record evidence here (Chrome version, OS, what
 you saw) as issues are validated. Local checks that already pass are listed
