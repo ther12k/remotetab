@@ -2,17 +2,33 @@
  * Device registry for WS authentication and server-side revocation (#018).
  * Durable (bun:sqlite) when DATABASE_URL is set, in-memory otherwise — both
  * implement the same interface. Stores PUBLIC identity material only.
+ *
+ * Identity continuity (audit issue #24): enrollment is INSERT-only. An
+ * existing device's key is never replaced — a connection either presents the
+ * exact registered identity or authentication fails. This keeps the proof
+ * "I possess the key this deviceId registered" meaningful even when the
+ * signaling service is hostile.
  */
 
 import { Database } from 'bun:sqlite';
 
+export type EnrollResult =
+  | 'enrolled'
+  | 'known'
+  | 'conflict';
+
 export interface DeviceRegistry {
-  register(
+  /**
+   * Insert a device identity. Never overwrites an existing key: a matching
+   * identity returns 'known', a different key for the same deviceId returns
+   * 'conflict' and leaves the stored identity untouched.
+   */
+  enroll(
     deviceId: string,
     publicKeySpki: string,
     fingerprint: string,
     displayName?: string,
-  ): void;
+  ): EnrollResult;
   get(
     deviceId: string,
   ): { publicKeySpki: string; fingerprint: string; revokedAtMs?: number } | undefined;
@@ -27,22 +43,31 @@ type DeviceRecord = {
   revokedAtMs?: number;
 };
 
+function compareEnroll(
+  existing: DeviceRecord | undefined,
+  publicKeySpki: string,
+  fingerprint: string,
+): EnrollResult | null {
+  if (!existing) return null; // caller inserts
+  return existing.publicKeySpki === publicKeySpki && existing.fingerprint === fingerprint
+    ? 'known'
+    : 'conflict';
+}
+
 export class MemoryDeviceRegistry implements DeviceRegistry {
   private readonly devices = new Map<string, DeviceRecord>();
 
-  register(
+  enroll(
     deviceId: string,
     publicKeySpki: string,
     fingerprint: string,
     displayName?: string,
-  ): void {
+  ): EnrollResult {
     const existing = this.devices.get(deviceId);
-    this.devices.set(deviceId, {
-      publicKeySpki,
-      fingerprint,
-      displayName: displayName ?? existing?.displayName,
-      revokedAtMs: existing?.revokedAtMs,
-    });
+    const verdict = compareEnroll(existing, publicKeySpki, fingerprint);
+    if (verdict) return verdict;
+    this.devices.set(deviceId, { publicKeySpki, fingerprint, displayName });
+    return 'enrolled';
   }
 
   get(deviceId: string): DeviceRecord | undefined {
@@ -79,19 +104,21 @@ export class SqliteDeviceRegistry implements DeviceRegistry {
     `);
   }
 
-  register(
+  enroll(
     deviceId: string,
     publicKeySpki: string,
     fingerprint: string,
     displayName?: string,
-  ): void {
-    const now = Date.now();
+  ): EnrollResult {
+    const existing = this.get(deviceId);
+    const verdict = compareEnroll(existing, publicKeySpki, fingerprint);
+    if (verdict) return verdict;
     this.db.run(
       `INSERT INTO devices (device_id, public_key_spki, fingerprint, display_name, registered_at_ms, revoked_at_ms)
-       VALUES (?, ?, ?, ?, ?, NULL)
-       ON CONFLICT(device_id) DO UPDATE SET public_key_spki = excluded.public_key_spki, fingerprint = excluded.fingerprint`,
-      [deviceId, publicKeySpki, fingerprint, displayName ?? null, now],
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+      [deviceId, publicKeySpki, fingerprint, displayName ?? null, Date.now()],
     );
+    return 'enrolled';
   }
 
   get(

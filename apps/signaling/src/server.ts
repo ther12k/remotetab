@@ -5,8 +5,13 @@
  */
 
 import { MAX_SIGNALING_FRAME_BYTES, newRequestId } from '@remotetab/protocol';
+import { timingSafeEqual } from '@remotetab/crypto';
 import { Hono } from 'hono';
-import { createDeviceRegistry } from './device-registry.ts';
+import {
+  createDeviceRegistry,
+  type DeviceRegistry,
+  type EnrollResult,
+} from './device-registry.ts';
 import type { Env } from './env.ts';
 import type { Logger } from './logger.ts';
 import { FrameRateLimiter } from './rate-limit.ts';
@@ -29,6 +34,7 @@ export type ServerHandle = {
   stop(): Promise<void>;
   registry: ConnectionRegistry;
   router: SignalingRouter;
+  devices: DeviceRegistry;
 };
 
 export type ServerOptions = {
@@ -70,6 +76,55 @@ export function startServer(
       deviceAuthMode: ctx.env.deviceAuthMode,
     }),
   );
+
+  const SPKI_SHAPE = /^[A-Za-z0-9_-]{20,512}$/;
+  const FINGERPRINT_SHAPE = /^[A-Za-z0-9_-]{20,64}$/;
+
+  const adminAuthorized = (c: { req: { header(name: string): string | undefined } }): boolean => {
+    if (ctx.env.adminToken === '') return false;
+    const header = c.req.header('authorization') ?? '';
+    const expected = `Bearer ${ctx.env.adminToken}`;
+    return timingSafeEqual(new TextEncoder().encode(header), new TextEncoder().encode(expected));
+  };
+
+  /**
+   * Controlled device enrollment (audit issue #25): the only way a device
+   * becomes known outside open-mode first-connection enrollment. Required
+   * for DEVICE_AUTH=required deployments, where unknown devices cannot
+   * self-enroll.
+   */
+  app.post('/admin/devices', async (c) => {
+    if (!adminAuthorized(c)) {
+      return c.json({ error: 'admin_disabled' }, ctx.env.adminToken === '' ? 404 : 403);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const { deviceId, publicKeySpki, publicKeyFingerprint, displayName } = body as {
+      deviceId?: unknown;
+      publicKeySpki?: unknown;
+      publicKeyFingerprint?: unknown;
+      displayName?: unknown;
+    };
+    if (
+      !isValidTurnDeviceId(deviceId) ||
+      typeof publicKeySpki !== 'string' ||
+      !SPKI_SHAPE.test(publicKeySpki) ||
+      typeof publicKeyFingerprint !== 'string' ||
+      !FINGERPRINT_SHAPE.test(publicKeyFingerprint) ||
+      (displayName !== undefined && typeof displayName !== 'string')
+    ) {
+      return c.json({ error: 'invalid_device_identity' }, 400);
+    }
+    const result: EnrollResult = devices.enroll(
+      deviceId,
+      publicKeySpki,
+      publicKeyFingerprint,
+      typeof displayName === 'string' ? displayName : undefined,
+    );
+    ctx.log.info('admin.device_enroll', { deviceId, result });
+    if (result === 'enrolled') return c.json({ status: 'enrolled' }, 201);
+    if (result === 'known') return c.json({ status: 'known' }, 200);
+    return c.json({ error: 'identity_conflict' }, 409);
+  });
 
   // Short-lived TURN credentials (issue #017). Disabled unless TURN_SECRET is
   // configured. The shared secret never leaves this process.
@@ -193,6 +248,7 @@ export function startServer(
     port: server.port ?? ctx.env.port,
     registry,
     router,
+    devices,
     stop: async () => {
       clearInterval(sweeper);
       for (const entry of sockets.values()) entry.close(1000, 'server-shutdown');
