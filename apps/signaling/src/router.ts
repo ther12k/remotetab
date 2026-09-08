@@ -496,7 +496,10 @@ export class SignalingRouter {
       this.sendError(conn, 'MESSAGE_INVALID', 'session.request requires phone role');
       return FATAL(WS_CLOSE_POLICY);
     }
-    if (this.deps.devices.isRevoked(reg.deviceId) || this.deps.devices.isRevoked(frame.payload.desktopDeviceId)) {
+    if (
+      this.deps.devices.isRevoked(reg.deviceId) ||
+      this.deps.devices.isRevoked(frame.payload.desktopDeviceId)
+    ) {
       this.sendError(conn, 'DEVICE_REVOKED', undefined, frame.id);
       return OK;
     }

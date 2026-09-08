@@ -12,10 +12,7 @@
 
 import { Database } from 'bun:sqlite';
 
-export type EnrollResult =
-  | 'enrolled'
-  | 'known'
-  | 'conflict';
+export type EnrollResult = 'enrolled' | 'known' | 'conflict';
 
 export interface DeviceRegistry {
   /**

@@ -28,7 +28,8 @@ afterAll(async () => {
 /** Minimal WS client that answers the device-auth challenge with a key. */
 class AuthClient {
   private ws: WebSocket;
-  private queue: { type: string; payload: Record<string, unknown> }[] = [];
+  /** Test-visible frame log. */
+  readonly queue: { type: string; payload: Record<string, unknown> }[] = [];
   readonly closed: Promise<{ code: number }>;
   private readonly signer: (nonce: string) => Promise<string>;
   private spki = '';
@@ -187,7 +188,13 @@ describe('WS device authentication', () => {
 
     // Same deviceId, DIFFERENT key: signature is valid, continuity is not.
     const second = await generateSigningKeyPair();
-    const attacker = await AuthClient.connect(base, deviceId, second.privateKey, second.publicKey, false);
+    const attacker = await AuthClient.connect(
+      base,
+      deviceId,
+      second.privateKey,
+      second.publicKey,
+      false,
+    );
     const challenge = await attacker.next('auth.challenge');
     await attacker.answerBroken((challenge.payload.nonce as string) ?? '', deviceId);
     await new Promise((r) => setTimeout(r, 250));
@@ -217,11 +224,7 @@ describe('DEVICE_AUTH=required end to end (#25)', () => {
     await required.stop();
   });
 
-  async function enroll(
-    deviceId: string,
-    spki: string,
-    fingerprint: string,
-  ): Promise<number> {
+  async function enroll(deviceId: string, spki: string, fingerprint: string): Promise<number> {
     const res = await fetch(`http://localhost:${required.port}/admin/devices`, {
       method: 'POST',
       headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
@@ -249,13 +252,21 @@ describe('DEVICE_AUTH=required end to end (#25)', () => {
     const fp = await fingerprintFromSpkiB64(spki);
     const noHeader = await fetch(`http://localhost:${required.port}/admin/devices`, {
       method: 'POST',
-      body: JSON.stringify({ deviceId: 'dev_x000000000000001', publicKeySpki: spki, publicKeyFingerprint: fp }),
+      body: JSON.stringify({
+        deviceId: 'dev_x000000000000001',
+        publicKeySpki: spki,
+        publicKeyFingerprint: fp,
+      }),
     });
     expect(noHeader.status).toBe(403);
     const wrongToken = await fetch(`http://localhost:${required.port}/admin/devices`, {
       method: 'POST',
       headers: { authorization: 'Bearer nope' },
-      body: JSON.stringify({ deviceId: 'dev_x000000000000001', publicKeySpki: spki, publicKeyFingerprint: fp }),
+      body: JSON.stringify({
+        deviceId: 'dev_x000000000000001',
+        publicKeySpki: spki,
+        publicKeyFingerprint: fp,
+      }),
     });
     expect(wrongToken.status).toBe(403);
   });
@@ -316,7 +327,12 @@ describe('DEVICE_AUTH=required end to end (#25)', () => {
     expect(await enroll(deviceId, spki, fp)).toBe(201);
 
     const impostor = await generateSigningKeyPair();
-    const client = await AuthClient.connect(requiredBase, deviceId, impostor.privateKey, impostor.publicKey);
+    const client = await AuthClient.connect(
+      requiredBase,
+      deviceId,
+      impostor.privateKey,
+      impostor.publicKey,
+    );
     const closed = await client.closed;
     expect(closed.code).toBe(1008);
   });

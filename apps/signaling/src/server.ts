@@ -4,14 +4,10 @@
  * lives in the runtime-neutral SignalingRouter.
  */
 
-import { MAX_SIGNALING_FRAME_BYTES, newRequestId } from '@remotetab/protocol';
 import { timingSafeEqual } from '@remotetab/crypto';
+import { MAX_SIGNALING_FRAME_BYTES, newRequestId } from '@remotetab/protocol';
 import { Hono } from 'hono';
-import {
-  createDeviceRegistry,
-  type DeviceRegistry,
-  type EnrollResult,
-} from './device-registry.ts';
+import { createDeviceRegistry, type DeviceRegistry, type EnrollResult } from './device-registry.ts';
 import type { Env } from './env.ts';
 import type { Logger } from './logger.ts';
 import { FrameRateLimiter } from './rate-limit.ts';
