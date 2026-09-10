@@ -13,7 +13,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
+# Accept both RT_DISPLAY=1 and RT_DISPLAY=:1
 DISPLAY_NUM=${RT_DISPLAY:-99}
+DISPLAY_NUM=${DISPLAY_NUM#:}
 export DISPLAY=":$DISPLAY_NUM"
 
 if [ "$DISPLAY_NUM" != "99" ]; then
