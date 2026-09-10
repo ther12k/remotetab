@@ -137,19 +137,17 @@ test('alpha.1 validation run', async () => {
     // ------------------------------------------------------------------
     // Laptop context: real extension on an isolated/declared display.
     // ------------------------------------------------------------------
-    laptop = await chromium.launchPersistentContext(
-      fs.mkdtempSync(path.join(os.tmpdir(), 'rt-laptop-')),
-      {
-        headless: false,
-        viewport: { width: 1000, height: 700 },
-        env: { ...process.env, DISPLAY: process.env.DISPLAY ?? ':99' },
-        args: [
-          '--remote-debugging-port=0',
-          `--disable-extensions-except=${EXTENSION_PATH}`,
-          `--load-extension=${EXTENSION_PATH}`,
-        ],
-      },
-    );
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-laptop-'));
+    laptop = await chromium.launchPersistentContext(userDataDir, {
+      headless: false,
+      viewport: { width: 1000, height: 700 },
+      env: { ...process.env, DISPLAY: process.env.DISPLAY ?? ':99' },
+      args: [
+        '--remote-debugging-port=0',
+        `--disable-extensions-except=${EXTENSION_PATH}`,
+        `--load-extension=${EXTENSION_PATH}`,
+      ],
+    });
     laptop.on('console', (msg) =>
       consoles.push(`laptop/${msg.type()}: ${msg.text().slice(0, 160)}`),
     );
@@ -226,32 +224,46 @@ test('alpha.1 validation run', async () => {
     const xdo = (args: string[]) => execFileSync('xdotool', args).toString().trim();
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+    // Identify OUR browser's window by process id — never by size guesses
+    // (in interactive mode a random user window can share the size class and
+    // OS clicks must never land in it).
     let winX = 0;
     let winY = 0;
     let winW = 0;
-    for (const id of xdo(['search', '--onlyvisible', '']).split('\n').filter(Boolean)) {
-      try {
-        const g = Object.fromEntries(
-          xdo(['getwindowgeometry', '--shell', id])
-            .split('\n')
-            .map((l) => l.split('=')),
-        ) as Record<string, string>;
-        const w = Number(g.WIDTH ?? 0);
-        const name = xdo(['getwindowname', id]);
-        if (w >= 800 && w <= 1400 && name.length > 0) {
-          winX = Number(g.X ?? 0);
-          winY = Number(g.Y ?? 0);
-          winW = w;
-          break;
+    try {
+      const pidOut = execFileSync('pgrep', ['-f', userDataDir]).toString().trim();
+      const pids = new Set(pidOut.split('\n').filter(Boolean));
+      for (const id of xdo(['search', '--onlyvisible', '--name', '.'])
+        .split('\n')
+        .filter(Boolean)) {
+        try {
+          const wpid = xdo(['getwindowpid', id]);
+          if (!pids.has(wpid)) continue;
+          const g = Object.fromEntries(
+            xdo(['getwindowgeometry', '--shell', id])
+              .split('\n')
+              .map((l) => l.split('=')),
+          ) as Record<string, string>;
+          const w = Number(g.WIDTH ?? 0);
+          if (w > 600) {
+            winX = Number(g.X ?? 0);
+            winY = Number(g.Y ?? 0);
+            winW = w;
+            break;
+          }
+        } catch {
+          // window without a pid property / vanished mid-scan
         }
-      } catch {
-        // window vanished mid-scan
       }
+    } catch {
+      // pgrep found nothing — leave winW=0, the human path takes over
     }
     record(
-      '2a main window on the test display',
+      '2a test browser window identified (pid-anchored)',
       winW > 0,
-      `OS window at (${winX},${winY}) ${winW}px wide`,
+      winW > 0
+        ? `OS window at (${winX},${winY}) ${winW}px wide, pid matched to ${path.basename(userDataDir)}`
+        : 'window not found — toolbar scan skipped, waiting for human click instead',
     );
 
     const popupTargets = async (): Promise<Set<string>> => {
@@ -265,7 +277,9 @@ test('alpha.1 validation run', async () => {
 
     let realPopupTargetId: string | null = null;
     const iconY = winY + 72;
-    for (let dx = 24; dx <= 170; dx += 12) {
+    // Only scan when we positively identified OUR browser window — never
+    // send OS clicks into unknown coordinates.
+    for (let dx = winW > 0 ? 24 : 0; winW > 0 && dx <= 170; dx += 12) {
       const before = await popupTargets();
       const iconX = winX + winW - dx;
       xdo(['mousemove', '--sync', String(iconX), String(iconY)]);
