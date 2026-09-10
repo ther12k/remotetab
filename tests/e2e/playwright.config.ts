@@ -1,4 +1,9 @@
-import { defineConfig } from 'playwright/test';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from '@playwright/test';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const EXTENSION_PATH = path.resolve(HERE, '../../apps/extension/.output/chrome-mv3');
 
 /**
  * RemoteTab browser E2E (issue #020).
@@ -17,12 +22,8 @@ export default defineConfig({
   timeout: 60_000,
   use: {
     headless: false, // extensions require headed Chrome
-    channel: 'chrome',
     launchOptions: {
-      args: [
-        `--disable-extensions-except=/home/runner/remotetab/apps/extension/.output/chrome-mv3`,
-        `--load-extension=/home/runner/remotetab/apps/extension/.output/chrome-mv3`,
-      ],
+      args: [`--disable-extensions-except=${EXTENSION_PATH}`, `--load-extension=${EXTENSION_PATH}`],
     },
   },
   webServer: {

@@ -83,8 +83,32 @@ async function onSaveSettings(): Promise<void> {
     : (res.error.message ?? 'Save failed.');
 }
 
-async function refreshTab(): Promise<void> {
+/**
+ * E2E test hook: popup.html?tabId=N pins the capture target. A real popup
+ * always resolves the active tab; only the test harness opens popup.html as
+ * a normal tab, where "active tab" would be the popup itself.
+ */
+function pinnedTestTabId(): number | null {
+  try {
+    const raw = new URLSearchParams(location.search).get('tabId');
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isSafeInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveTargetTab(): Promise<{ id?: number; title?: string; url?: string } | null> {
+  const pinned = pinnedTestTabId();
+  if (pinned !== null) {
+    return (await browser.tabs.get(pinned).catch(() => null)) ?? null;
+  }
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return tab ?? null;
+}
+
+async function refreshTab(): Promise<void> {
+  const tab = await resolveTargetTab();
   const titleEl = document.getElementById('tab-title');
   const originEl = document.getElementById('tab-origin');
   if (!tab || !titleEl || !originEl) return;
@@ -99,7 +123,7 @@ async function refreshTab(): Promise<void> {
 }
 
 async function onEnable(): Promise<void> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const tab = await resolveTargetTab();
   const errorEl = document.getElementById('error');
   if (!tab?.id) {
     if (errorEl) errorEl.textContent = 'No active tab found.';

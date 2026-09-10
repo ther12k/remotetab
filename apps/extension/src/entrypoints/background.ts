@@ -573,7 +573,6 @@ export default defineBackground(() => {
     const enabled = transition(current, { type: 'enable', tabId, nowMs: Date.now() });
     await store.save(enabled);
     teardown = null; // fresh teardown pass for this Remote Mode lifecycle
-    teardown = null; // fresh teardown pass for this Remote Mode lifecycle
 
     try {
       await ensureOffscreenDocument();

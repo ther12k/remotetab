@@ -15,7 +15,28 @@ Run rules:
 - Only after the report is captured, diagnose (the template includes the
   "tap doesn't work" differential ordering).
 
-Setup:
+Two ways to run it:
+
+**A. Automated harness (recommended)** — `tests/e2e/run-alpha1.sh` drives real
+Chrome on both sides: extension, pairing, connection, tap/keyboard/scroll on
+the neutral test page, and clean-Stop checks, writing
+`tests/e2e/results/alpha1-report.json`. Chromium only grants the tabCapture
+gesture to a genuine human click on the real action popup (ADR-013 by
+design), so the harness pauses at "WAITING FOR HUMAN" for exactly one click:
+
+```sh
+bun install && bun run build:extension
+bun run dev:signaling        # terminal 1
+bun run dev:mobile           # terminal 2
+RT_DISPLAY=:1 tests/e2e/run-alpha1.sh   # opens on your desktop; you click Enable once
+```
+
+Without `RT_DISPLAY=:1` it runs on an isolated Xvfb and ends BLOCKED at the
+enable step (nothing to click there) — still useful as a smoke test.
+
+**B. Fully manual** — as described below.
+
+Manual setup:
 
 ```sh
 bun install

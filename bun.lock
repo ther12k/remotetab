@@ -6,6 +6,7 @@
       "name": "remotetab",
       "devDependencies": {
         "@biomejs/biome": "^2.5.12",
+        "@playwright/test": "^1.63.0",
         "jsdom": "^30.0.1",
         "typescript": "^7.0.2",
         "vitest": "^5.0.0",
@@ -13,7 +14,7 @@
     },
     "apps/extension": {
       "name": "@remotetab/extension",
-      "version": "0.1.0",
+      "version": "0.1.0-alpha.1",
       "dependencies": {
         "@remotetab/crypto": "workspace:*",
         "@remotetab/protocol": "workspace:*",
@@ -26,7 +27,7 @@
     },
     "apps/mobile-web": {
       "name": "@remotetab/mobile-web",
-      "version": "0.1.0",
+      "version": "0.1.0-alpha.1",
       "dependencies": {
         "@remotetab/crypto": "workspace:*",
         "@remotetab/protocol": "workspace:*",
@@ -45,7 +46,7 @@
     },
     "apps/signaling": {
       "name": "@remotetab/signaling",
-      "version": "0.1.0",
+      "version": "0.1.0-alpha.1",
       "dependencies": {
         "@remotetab/crypto": "workspace:*",
         "@remotetab/protocol": "workspace:*",
@@ -61,11 +62,11 @@
     },
     "packages/crypto": {
       "name": "@remotetab/crypto",
-      "version": "0.1.0",
+      "version": "0.1.0-alpha.1",
     },
     "packages/protocol": {
       "name": "@remotetab/protocol",
-      "version": "0.1.0",
+      "version": "0.1.0-alpha.1",
       "dependencies": {
         "zod": "^4.5.4",
       },
@@ -76,7 +77,7 @@
     },
     "packages/webrtc": {
       "name": "@remotetab/webrtc",
-      "version": "0.1.0",
+      "version": "0.1.0-alpha.1",
       "dependencies": {
         "@remotetab/crypto": "workspace:*",
         "@remotetab/protocol": "workspace:*",
@@ -329,6 +330,8 @@
     "@napi-rs/lzma-linux-x64-gnu": ["@napi-rs/lzma-linux-x64-gnu@1.5.1", "", { "os": "linux", "cpu": "x64" }, "sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.148.0", "", {}, "sha512-Nm4s/jB+4FpFsPhWGEC4h7rzksesmtnMXomo6rCMcg/b8zLQuOziRgkCS1fxDCXOlJB/6Q8oABOZ/OP6RIPj9A=="],
+
+    "@playwright/test": ["@playwright/test@1.63.0", "", { "dependencies": { "playwright": "1.63.0" }, "bin": { "playwright": "cli.js" } }, "sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ=="],
 
     "@remotetab/config": ["@remotetab/config@workspace:packages/config"],
 
@@ -949,6 +952,10 @@
     "picomatch": ["picomatch@4.0.7", "", {}, "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA=="],
 
     "pkg-types": ["pkg-types@2.3.3", "", { "dependencies": { "confbox": "^0.3.1", "exsolve": "^1.1.1", "pathe": "^2.0.3" } }, "sha512-j/lCFdcppV0JxWpCEITdbDltBxPP6cHT+yNJ6Go2OgoSA9518X847X9z0p6LtA4Nc16+eQzCZjRrWanTGvHJ5w=="],
+
+    "playwright": ["playwright@1.63.0", "", { "dependencies": { "playwright-core": "1.63.0" }, "bin": { "playwright": "cli.js" } }, "sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg=="],
+
+    "playwright-core": ["playwright-core@1.63.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg=="],
 
     "possible-typed-array-names": ["possible-typed-array-names@1.1.0", "", {}, "sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg=="],
 

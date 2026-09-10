@@ -9,7 +9,7 @@
  * TODO(#020 follow-up): drive the popup via chrome.action; today the flow
  * assumes the user clicks Enable Remote once at session start.
  */
-import { expect, test } from 'playwright/test';
+import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('http://localhost:5599/test-page.html');
